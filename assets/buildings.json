@@ -1,0 +1,45 @@
+{
+  "reference_size": [1280, 720],
+  "templates": [
+    {
+      "name": "town_hall_level_2",
+      "category": "town_hall",
+      "source": "../base_now.png",
+      "crop": [580, 245, 745, 375],
+      "threshold": 0.82,
+      "max_matches": 1
+    },
+    {
+      "name": "gold_mine_level_1",
+      "category": "gold_mine",
+      "source": "../base_now.png",
+      "crop": [710, 175, 804, 232],
+      "threshold": 0.60,
+      "max_matches": 7
+    },
+    {
+      "name": "elixir_collector_level_1",
+      "category": "elixir_collector",
+      "source": "../base_now.png",
+      "crop": [482, 354, 568, 430],
+      "threshold": 0.62,
+      "max_matches": 7
+    },
+    {
+      "name": "gold_storage_level_1",
+      "category": "gold_storage",
+      "source": "../base_now.png",
+      "crop": [414, 102, 530, 215],
+      "threshold": 0.70,
+      "max_matches": 4
+    }
+  ],
+  "ui": {
+    "upgrade_hammer": {
+      "source": "../base_now.png",
+      "crop": [1188, 602, 1258, 674],
+      "threshold": 0.45,
+      "scales": [0.62, 0.72, 0.82, 0.92, 1.02]
+    }
+  }
+}

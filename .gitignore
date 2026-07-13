@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 *.egg-info/
 screenshot*.png
+# scratch/debug captures (keep assets/templates/ tracked)
+/*.png
+!base_now.png
+find_debug*.png

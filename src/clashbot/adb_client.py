@@ -70,3 +70,11 @@ class AdbClient:
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._run(["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
+
+    def keyevent(self, keycode: int | str) -> None:
+        """Send an Android key event, e.g. 4 / 'KEYCODE_BACK' to close a menu."""
+        self._run(["shell", "input", "keyevent", str(keycode)])
+
+    def back(self) -> None:
+        """Press BACK — dismisses the building info panel / any open menu."""
+        self.keyevent(4)
