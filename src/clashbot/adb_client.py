@@ -7,7 +7,10 @@ Works against any Android emulator that exposes an ADB endpoint
 from __future__ import annotations
 
 import subprocess
+import os
+import shutil
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class AdbError(RuntimeError):
@@ -20,9 +23,35 @@ class Device:
     state: str
 
 
+def adb_executable() -> str:
+    """Find ADB on PATH or in common Windows emulator installations."""
+    configured = os.environ.get("CLASHBOT_ADB")
+    if configured:
+        if not Path(configured).is_file():
+            raise AdbError(f"CLASHBOT_ADB does not point to a file: {configured}")
+        return configured
+    on_path = shutil.which("adb")
+    if on_path:
+        return on_path
+    if os.name == "nt":
+        candidates = (
+            r"C:\Program Files\Microvirt\MEmu\adb.exe",
+            r"C:\Program Files\BlueStacks_nxt\HD-Adb.exe",
+            r"C:\Program Files\Nox\bin\nox_adb.exe",
+            r"C:\LDPlayer\LDPlayer9\adb.exe",
+            r"C:\Program Files\ldplayerbox\adb.exe",
+        )
+        for candidate in candidates:
+            if Path(candidate).is_file():
+                return candidate
+    raise AdbError(
+        "adb was not found; add it to PATH or set CLASHBOT_ADB to its executable"
+    )
+
+
 def _run(args: list[str], input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
     result = subprocess.run(
-        ["adb", *args],
+        [adb_executable(), *args],
         input=input_bytes,
         capture_output=True,
     )
@@ -64,6 +93,11 @@ class AdbClient:
         """Returns raw PNG bytes of the current device screen."""
         result = self._run(["exec-out", "screencap", "-p"])
         return result.stdout
+
+    def shell_text(self, *args: str) -> str:
+        """Run a shell command and return decoded stdout."""
+        result = self._run(["shell", *args])
+        return result.stdout.decode(errors="replace")
 
     def tap(self, x: int, y: int) -> None:
         self._run(["shell", "input", "tap", str(x), str(y)])

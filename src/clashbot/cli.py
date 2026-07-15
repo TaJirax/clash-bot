@@ -3,8 +3,11 @@
 Phase 1 (interaction):
     python -m clashbot devices
     python -m clashbot screenshot <serial> [outfile.png]
+    python -m clashbot menu-capture <serial> <session> <state> [options]
     python -m clashbot tap <serial> <x> <y> [--raw] [--radius N]
     python -m clashbot swipe <serial> <x1> <y1> <x2> <y2> [duration_ms] [--raw]
+    python -m clashbot zoom-in|zoom-out <serial> [--steps N]
+    python -m clashbot normalize-zoom <serial> [--target SCALE]
 
 Phase 2 (recognition):
     python -m clashbot find <serial> <template.png> [--threshold F] [--all]
@@ -44,6 +47,25 @@ def cmd_screenshot(args: argparse.Namespace) -> None:
     print(f"Saved {len(png_bytes)} bytes to {args.outfile}")
 
 
+def cmd_menu_capture(args: argparse.Namespace) -> None:
+    from .menu_capture import MenuDataset
+
+    client = adb_client.AdbClient(args.serial)
+    dataset = MenuDataset(args.root, args.session)
+    record = dataset.capture(
+        client.screenshot(),
+        state=args.state,
+        description=args.description,
+        after=args.after,
+        action=args.action,
+    )
+    print(
+        f"captured #{record['id']} state={record['state']} "
+        f"({record['width']}x{record['height']}) -> "
+        f"{dataset.directory / record['file']}"
+    )
+
+
 def cmd_tap(args: argparse.Namespace) -> None:
     client = adb_client.AdbClient(args.serial)
     if args.raw:
@@ -60,6 +82,296 @@ def cmd_swipe(args: argparse.Namespace) -> None:
     else:
         HumanInput(client).swipe(args.x1, args.y1, args.x2, args.y2,
                                  duration_ms=args.duration_ms, settle=False)
+
+
+def _show_zoom_result(result) -> bool:
+    before = "unknown" if result.before_scale is None else f"{result.before_scale:.2f}x"
+    after = "unknown" if result.after_scale is None else f"{result.after_scale:.2f}x"
+    status = "verified" if result.verified else "NOT VERIFIED"
+    print(f"zoom {result.direction}: {before} -> {after} ({status})")
+    return result.verified
+
+
+def cmd_zoom(args: argparse.Namespace) -> None:
+    from .camera import controller_from_catalog
+    from .memu_input import MEmuInputError, MEmuZoom, infer_instance
+    from .multitouch import AdbPinchZoom, MultiTouchError
+    from .windows_input import WindowsCtrlWheel, WindowsInputError
+
+    if args.backend == "windows":
+        actuator = WindowsCtrlWheel(args.window_title)
+    elif args.backend == "multitouch":
+        actuator = AdbPinchZoom(adb_client.AdbClient(args.serial))
+    elif args.backend == "memu":
+        instance = args.memu_instance
+        if instance is None:
+            instance = infer_instance(args.serial)
+        if instance is None:
+            print("could not infer MEmu instance; pass --memu-instance", file=sys.stderr)
+            sys.exit(2)
+        actuator = MEmuZoom(instance)
+    else:
+        actuator = None
+    controller = controller_from_catalog(
+        adb_client.AdbClient(args.serial), args.catalog, actuator=actuator
+    )
+    try:
+        result = controller.adjust(args.direction, steps=args.steps)
+    except (WindowsInputError, MEmuInputError, MultiTouchError) as error:
+        print(f"zoom input error: {error}", file=sys.stderr)
+        sys.exit(2)
+    if not _show_zoom_result(result):
+        print(
+            "The game did not show the requested scale change. The input backend "
+            "may be unsupported, or too few buildings were recognized.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+def cmd_normalize_zoom(args: argparse.Namespace) -> None:
+    from .camera import controller_from_catalog
+    from .memu_input import MEmuInputError, MEmuZoom, infer_instance
+    from .multitouch import AdbPinchZoom, MultiTouchError
+    from .windows_input import WindowsCtrlWheel, WindowsInputError
+
+    if args.backend == "windows":
+        actuator = WindowsCtrlWheel(args.window_title)
+    elif args.backend == "multitouch":
+        actuator = AdbPinchZoom(adb_client.AdbClient(args.serial))
+    elif args.backend == "memu":
+        instance = args.memu_instance
+        if instance is None:
+            instance = infer_instance(args.serial)
+        if instance is None:
+            print("could not infer MEmu instance; pass --memu-instance", file=sys.stderr)
+            sys.exit(2)
+        actuator = MEmuZoom(instance)
+    else:
+        actuator = None
+    controller = controller_from_catalog(
+        adb_client.AdbClient(args.serial), args.catalog, actuator=actuator
+    )
+    initial = controller.measure()
+    if initial is None:
+        print("could not estimate camera scale from visible buildings", file=sys.stderr)
+        sys.exit(2)
+    try:
+        results = controller.normalize(args.target, max_steps=args.max_steps)
+    except (WindowsInputError, MEmuInputError, MultiTouchError) as error:
+        print(f"zoom input error: {error}", file=sys.stderr)
+        sys.exit(2)
+    if not results:
+        print(f"camera already near target: {initial:.2f}x")
+        return
+    for result in results:
+        if not _show_zoom_result(result):
+            sys.exit(2)
+    final = results[-1].after_scale
+    if final is None or abs(final - args.target) > 0.06:
+        print(f"stopped at {final:.2f}x before reaching {args.target:.2f}x", file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_pan_camera(args: argparse.Namespace) -> None:
+    from .navigation import CameraPanController
+
+    result = CameraPanController(adb_client.AdbClient(args.serial)).pan(
+        args.direction, distance=args.distance
+    )
+    status = "verified" if result.verified else "BLOCKED/NOT VERIFIED"
+    print(
+        f"pan {result.direction}: content shift "
+        f"({result.content_dx:.1f}, {result.content_dy:.1f}), "
+        f"response={result.response:.2f} ({status})"
+    )
+    if not result.verified:
+        sys.exit(2)
+
+
+def cmd_map_base(args: argparse.Namespace) -> None:
+    from .camera import controller_from_catalog
+    from .multitouch import AdbPinchZoom
+    from .navigation import BaseMapper, CameraPanController
+    from .upgrades import BuildingRecognizer, ReferenceCatalog
+
+    route = [part.strip().lower() for part in args.route.split(",") if part.strip()]
+    invalid = [part for part in route if part not in ("up", "down", "left", "right")]
+    if invalid:
+        print(f"invalid route direction(s): {', '.join(invalid)}", file=sys.stderr)
+        sys.exit(2)
+    client = adb_client.AdbClient(args.serial)
+    if not args.skip_zoom_normalize:
+        zoom = controller_from_catalog(
+            client, args.catalog, actuator=AdbPinchZoom(client)
+        )
+        initial = zoom.measure()
+        if initial is None:
+            print("could not estimate camera scale before mapping", file=sys.stderr)
+            sys.exit(2)
+        results = zoom.normalize(args.zoom_target, max_steps=args.zoom_steps)
+        if results and not all(result.verified for result in results):
+            print("camera zoom normalization failed; mapping stopped", file=sys.stderr)
+            sys.exit(2)
+        final_scale = results[-1].after_scale if results else initial
+        print(f"mapping camera scale: {final_scale:.2f}x")
+    mapper = BaseMapper(
+        client,
+        BuildingRecognizer(ReferenceCatalog(args.catalog)),
+        CameraPanController(client),
+        root=args.root,
+        session=args.session,
+    )
+    manifest = mapper.scan(route)
+    print(
+        f"mapped {len(manifest['buildings'])} building(s) across "
+        f"{len(manifest['views'])} view(s) -> {mapper.directory / 'map.json'}"
+    )
+
+
+def cmd_find_building(args: argparse.Namespace) -> None:
+    from .navigation import CameraPanController
+    from .upgrades import BuildingRecognizer, ReferenceCatalog
+    from . import vision
+
+    route = [part.strip().lower() for part in args.route.split(",") if part.strip()]
+    if any(part not in ("up", "down", "left", "right") for part in route):
+        print("route must contain only up, down, left, right", file=sys.stderr)
+        sys.exit(2)
+    client = adb_client.AdbClient(args.serial)
+    recognizer = BuildingRecognizer(ReferenceCatalog(args.catalog))
+    pan = CameraPanController(client)
+    for view_id, direction in enumerate([None, *route], start=1):
+        if direction is not None:
+            pan.pan(direction)
+        targets = [
+            target for target in recognizer.find(vision.decode(client.screenshot()))
+            if target.category == args.category
+        ]
+        if not targets:
+            continue
+        target = max(targets, key=lambda item: item.score)
+        print(
+            f"found {target.category}/{target.name} in view {view_id} at "
+            f"({target.x}, {target.y}), score={target.score:.3f}"
+        )
+        if args.tap:
+            HumanInput(client).tap(target.x, target.y, radius=target.radius)
+            print("building tapped; its game menu should now be open")
+        return
+    print(f"no {args.category!r} building found along route", file=sys.stderr)
+    sys.exit(2)
+
+
+def cmd_open_attack(args: argparse.Namespace) -> None:
+    from .attack import AttackNavigator
+
+    result = AttackNavigator(adb_client.AdbClient(args.serial)).open()
+    if not result.opened:
+        print("Attack button/menu could not be visually verified", file=sys.stderr)
+        sys.exit(2)
+    print(
+        f"Attack menu opened and verified "
+        f"(button={result.button_score:.3f}, menu={result.menu_score:.3f})"
+    )
+
+
+def cmd_anti_afk(args: argparse.Namespace) -> None:
+    from .anti_afk import AntiAfk
+
+    try:
+        completed = AntiAfk(adb_client.AdbClient(args.serial)).run(
+            loops=args.loops,
+            interval=(args.interval_min, args.interval_max),
+            dry_run=args.dry_run,
+        )
+    except KeyboardInterrupt:
+        print("stopped")
+        return
+    print(f"done: {completed} anti-afk check(s)")
+
+
+def cmd_find_match(args: argparse.Namespace) -> None:
+    from .attack import FindMatchNavigator
+
+    if args.stay and not args.confirm:
+        print("--stay requires --confirm", file=sys.stderr)
+        sys.exit(2)
+    result = FindMatchNavigator(adb_client.AdbClient(args.serial)).find(
+        confirm=args.confirm,
+        return_home=not args.stay,
+    )
+    if not result.prepared:
+        print("Find Match or army confirmation was not verified", file=sys.stderr)
+        sys.exit(2)
+    if not args.confirm:
+        print("army confirmation opened and verified; matchmaking not started")
+        return
+    if not result.opponent_found:
+        print("opponent scouting screen was not verified", file=sys.stderr)
+        sys.exit(2)
+    if args.stay:
+        print("opponent found and verified; scouting screen left open")
+    elif result.returned_home:
+        print("opponent found and verified; exited safely without deploying troops")
+    else:
+        print("opponent found, but safe return home was not verified", file=sys.stderr)
+        sys.exit(2)
+
+
+def cmd_check_upgrade_ui(args: argparse.Namespace) -> None:
+    """Open upgrade details and verify controls without confirming a spend."""
+    from . import vision
+    from .upgrades import (BuildingRecognizer, ReferenceCatalog, SafeIdleTouch,
+                           UpgradeUi)
+
+    client = adb_client.AdbClient(args.serial)
+    human = HumanInput(client)
+    catalog = ReferenceCatalog(args.catalog)
+    targets = [
+        target for target in BuildingRecognizer(catalog).find(
+            vision.capture(client)
+        ) if target.category == args.category
+    ]
+    if not targets:
+        print(f"no {args.category!r} building found", file=sys.stderr)
+        sys.exit(2)
+    target = max(targets, key=lambda item: item.score)
+    print(f"selecting {target.name} at ({target.x}, {target.y}), score={target.score:.3f}")
+    human.tap(target.x, target.y, radius=target.radius)
+    ui = UpgradeUi(catalog)
+    selected = vision.capture(client)
+    hammer = ui.find_hammer(selected)
+    if hammer is None:
+        human.wait(0.7, 1.0)
+        selected = vision.capture(client)
+        hammer = ui.find_hammer(selected)
+    if hammer is None:
+        # ADB/emulator occasionally drops a touch while rendering. A second
+        # verified building tap is safer than guessing at toolbar coordinates.
+        human.tap(target.x, target.y, radius=max(5.0, target.radius * 0.65))
+        selected = vision.capture(client)
+        hammer = ui.find_hammer(selected)
+    if hammer is None:
+        print("upgrade hammer was not recognized", file=sys.stderr)
+        sys.exit(2)
+    print(f"upgrade hammer verified at {hammer.center}, score={hammer.score:.3f}")
+    human.tap(*hammer.center, radius=max(6.0, min(hammer.w, hammer.h) * 0.20))
+    details = vision.capture(client)
+    confirm = ui.find_resource_confirm(details)
+    client.back()
+    human.wait(0.5, 0.8)
+    base = vision.capture(client)
+    safe = SafeIdleTouch().point(base)
+    if safe is not None:
+        human.tap(*safe, radius=4.0)
+    if confirm is None:
+        print("upgrade resource confirmation was not available/recognized", file=sys.stderr)
+        sys.exit(2)
+    print(
+        f"resource confirmation verified at {confirm.center}, "
+        f"score={confirm.score:.3f}; not clicked"
+    )
 
 
 def cmd_find(args: argparse.Namespace) -> None:
@@ -133,6 +445,19 @@ def main() -> None:
     p.add_argument("outfile", nargs="?", default="screenshot.png")
     p.set_defaults(func=cmd_screenshot)
 
+    p = sub.add_parser(
+        "menu-capture",
+        help="capture a labeled menu screen and optionally record how it was reached",
+    )
+    p.add_argument("serial")
+    p.add_argument("session", help="dataset/session name, e.g. th2_menus")
+    p.add_argument("state", help="current screen name, e.g. army_overview")
+    p.add_argument("--description", default="", help="what is visible or what this menu does")
+    p.add_argument("--after", help="previous state name")
+    p.add_argument("--action", help="action taken in the previous state")
+    p.add_argument("--root", default="captures/menus", help="menu dataset directory")
+    p.set_defaults(func=cmd_menu_capture)
+
     p = sub.add_parser("tap")
     p.add_argument("serial")
     p.add_argument("x", type=int)
@@ -150,6 +475,79 @@ def main() -> None:
     p.add_argument("duration_ms", type=int, nargs="?", default=None)
     p.add_argument("--raw", action="store_true", help="exact swipe, no jitter")
     p.set_defaults(func=cmd_swipe)
+
+    for command, direction in (("zoom-in", "in"), ("zoom-out", "out")):
+        p = sub.add_parser(command, help=f"visually verified camera zoom {direction}")
+        p.add_argument("serial")
+        p.add_argument("--steps", type=int, default=1)
+        p.add_argument("--catalog", default="assets/buildings.json")
+        p.add_argument("--backend", choices=("multitouch", "memu", "windows", "android"), default="multitouch")
+        p.add_argument("--memu-instance", type=int)
+        p.add_argument("--window-title", default="MEmu")
+        p.set_defaults(func=cmd_zoom, direction=direction)
+
+    p = sub.add_parser("normalize-zoom", help="move camera toward a known mapping scale")
+    p.add_argument("serial")
+    p.add_argument("--target", type=float, default=0.80)
+    p.add_argument("--max-steps", type=int, default=6)
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.add_argument("--backend", choices=("multitouch", "memu", "windows", "android"), default="multitouch")
+    p.add_argument("--memu-instance", type=int)
+    p.add_argument("--window-title", default="MEmu")
+    p.set_defaults(func=cmd_normalize_zoom)
+
+    for command, direction in (("pan-up", "up"), ("pan-down", "down"),
+                               ("pan-left", "left"), ("pan-right", "right")):
+        p = sub.add_parser(command, help=f"move the village camera {direction} and verify it")
+        p.add_argument("serial")
+        p.add_argument("--distance", type=float, default=0.22)
+        p.set_defaults(func=cmd_pan_camera, direction=direction)
+
+    p = sub.add_parser("map-base", help="scan several camera positions into one base map")
+    p.add_argument("serial")
+    p.add_argument("session")
+    p.add_argument("--route", default="right,left,up,down")
+    p.add_argument("--zoom-target", type=float, default=0.55)
+    p.add_argument("--zoom-steps", type=int, default=6)
+    p.add_argument("--skip-zoom-normalize", action="store_true")
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.add_argument("--root", default="captures/maps")
+    p.set_defaults(func=cmd_map_base)
+
+    p = sub.add_parser("find-building", help="search camera views for a building category")
+    p.add_argument("serial")
+    p.add_argument("category", help="e.g. town_hall, gold_mine, elixir_collector")
+    p.add_argument("--route", default="right,left,up,down")
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.add_argument("--tap", action="store_true", help="tap the best verified detection")
+    p.set_defaults(func=cmd_find_building)
+
+    p = sub.add_parser("open-attack", help="visually verify and open the Attack menu")
+    p.add_argument("serial")
+    p.set_defaults(func=cmd_open_attack)
+
+    p = sub.add_parser("find-match", help="open and optionally confirm multiplayer search")
+    p.add_argument("serial")
+    p.add_argument("--confirm", action="store_true",
+                   help="spend the displayed search cost and find an opponent")
+    p.add_argument("--stay", action="store_true",
+                   help="leave opponent scouting open; deployment countdown continues")
+    p.set_defaults(func=cmd_find_match)
+
+    p = sub.add_parser("check-upgrade-ui",
+                       help="verify hammer and resource button without upgrading")
+    p.add_argument("serial")
+    p.add_argument("--category", default="gold_mine")
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.set_defaults(func=cmd_check_upgrade_ui)
+
+    p = sub.add_parser("anti-afk", help="periodically touch verified empty home-village grass")
+    p.add_argument("serial")
+    p.add_argument("--loops", type=int, default=0, help="0 runs until Ctrl+C")
+    p.add_argument("--interval-min", type=float, default=35.0)
+    p.add_argument("--interval-max", type=float, default=65.0)
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_anti_afk)
 
     p = sub.add_parser("find")
     p.add_argument("serial")

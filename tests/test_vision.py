@@ -51,6 +51,29 @@ def test_find_all_dedupes_to_one_hit_per_instance():
     assert centers == [(50, 50), (130, 260), (210, 160)]
 
 
+def test_find_all_matches_camera_zoom_and_dedupes_across_scales():
+    tmpl = _template()
+    enlarged = cv2.resize(tmpl, (24, 24), interpolation=cv2.INTER_LINEAR)
+    scene = _scene_with(enlarged, [(100, 60)])
+
+    matches = vision.find_all(
+        scene,
+        tmpl,
+        threshold=0.85,
+        scales=[1.0, 1.1, 1.2, 1.3],
+    )
+
+    assert len(matches) == 1
+    assert matches[0].scale == 1.2
+    assert abs(matches[0].center[0] - 112) <= 2
+    assert abs(matches[0].center[1] - 72) <= 2
+
+
+def test_scale_for_uses_limiting_dimension_with_letterbox():
+    scene = np.zeros((720, 1600, 3), dtype=np.uint8)
+    assert vision.scale_for(scene) == 1.0
+
+
 def test_multi_scale_finds_shrunken_template():
     # Author a template large, render it half-size into the scene: only a
     # scale sweep should locate it.
@@ -109,3 +132,19 @@ def test_decode_roundtrips_png_bytes():
 
     assert img.shape == tmpl.shape
     assert np.array_equal(img, tmpl)
+
+
+def test_capture_retries_black_corrupted_frame():
+    class Client:
+        def __init__(self):
+            good = np.full((40, 60, 3), 30, dtype=np.uint8)
+            good[10:30, 20:40] = _template()
+            self.images = [np.zeros((40, 60, 3), dtype=np.uint8), good]
+
+        def screenshot(self):
+            ok, encoded = cv2.imencode(".png", self.images.pop(0))
+            assert ok
+            return encoded.tobytes()
+
+    scene = vision.capture(Client(), attempts=2, delay=0)
+    assert not vision.is_corrupt_frame(scene)

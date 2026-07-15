@@ -76,6 +76,7 @@ class BuildingTarget:
     y: int
     score: float
     radius: float = 10.0
+    camera_scale: float = 1.0
 
 
 @dataclass
@@ -98,6 +99,12 @@ class ReferenceCatalog:
             data = json.load(f)
         self.base_dir = self.path.resolve().parent
         self.reference_size = tuple(data.get("reference_size", vision.REFERENCE_SIZE))
+        self.camera_scales = tuple(float(value) for value in data.get(
+            "camera_scales", (0.35, 0.45, 0.55, 0.65, 0.75, 0.85,
+                              0.95, 1.05, 1.15, 1.25, 1.35)
+        ))
+        if not self.camera_scales or any(value <= 0 for value in self.camera_scales):
+            raise ValueError("camera_scales must contain positive values")
         self.specs = [self._building_spec(item) for item in data.get("templates", [])]
         if not self.specs:
             raise ValueError(f"no building templates configured in {path!r}")
@@ -157,9 +164,11 @@ class BuildingRecognizer:
 
     def find(self, scene: np.ndarray) -> list[BuildingTarget]:
         h, w = scene.shape[:2]
-        sx = w / self.catalog.reference_size[0]
-        sy = h / self.catalog.reference_size[1]
-        scale = (sx + sy) / 2
+        resolution_scale = min(
+            w / self.catalog.reference_size[0],
+            h / self.catalog.reference_size[1],
+        )
+        scales = [resolution_scale * value for value in self.catalog.camera_scales]
         vx1, vy1, vx2, vy2 = VILLAGE_FRAC
         bounds = (vx1 * w, vy1 * h, vx2 * w, vy2 * h)
 
@@ -170,7 +179,7 @@ class BuildingRecognizer:
                 template,
                 name=spec.name,
                 threshold=spec.threshold,
-                scale=scale,
+                scales=scales,
             )
             accepted = []
             for hit in hits:
@@ -199,6 +208,7 @@ class BuildingRecognizer:
                 y=hit.center[1],
                 score=hit.score,
                 radius=max(7.0, min(hit.w, hit.h) * 0.18),
+                camera_scale=hit.scale / resolution_scale,
             )
             for spec, hit in kept
         ]
@@ -331,14 +341,14 @@ class UpgradeBot:
         return out
 
     def _deselect(self, scene: np.ndarray | None = None) -> None:
-        scene = scene if scene is not None else vision.decode(self.client.screenshot())
+        scene = scene if scene is not None else vision.capture(self.client)
         point = self.idle.point(scene)
         if point is not None:
             self.human.tap(*point, radius=4.0)
 
     def scan_once(self, *, dry_run: bool = False,
                   log: Callable[[str], None] = print) -> ScanResult:
-        scene = vision.decode(self.client.screenshot())
+        scene = vision.capture(self.client)
         targets = self._targets(scene)
         result = ScanResult()
         for target in targets:
@@ -350,8 +360,15 @@ class UpgradeBot:
 
         for target in targets:
             self.human.tap(target.x, target.y, radius=target.radius)
-            selected = vision.decode(self.client.screenshot())
+            selected = vision.capture(self.client)
             hammer = self.ui.find_hammer(selected)
+            if hammer is None:
+                # Lower-end or busy emulators occasionally return a frame from
+                # the toolbar's opening animation. Recheck once without
+                # issuing another tap; a second tap could toggle game UI.
+                self.human.wait(0.6, 0.9)
+                selected = vision.capture(self.client)
+                hammer = self.ui.find_hammer(selected)
             if hammer is None:
                 result.unavailable.append(target)
                 log(f"{target.category}/{target.name}: no upgrade hammer")
@@ -359,7 +376,7 @@ class UpgradeBot:
                 continue
 
             self.human.tap(*hammer.center, radius=max(5.0, min(hammer.w, hammer.h) * 0.22))
-            details = vision.decode(self.client.screenshot())
+            details = vision.capture(self.client)
             confirm = self.ui.find_resource_confirm(details)
             if confirm is None:
                 result.unavailable.append(target)
@@ -374,7 +391,7 @@ class UpgradeBot:
             self.human.tap(*confirm.center, radius=max(5.0, min(confirm.w, confirm.h) * 0.20))
             result.attempted.append(target)
             log(f"{target.category}/{target.name}: pressed resource upgrade")
-            after = vision.decode(self.client.screenshot())
+            after = vision.capture(self.client)
             if self.ui.find_resource_confirm(after) is not None:
                 # Still on details or an insufficient-resource/gem offer modal.
                 # BACK is safe here and, crucially, we never click that offer.
@@ -388,7 +405,7 @@ class UpgradeBot:
         return result
 
     def idle_touch(self, log: Callable[[str], None] = print) -> bool:
-        scene = vision.decode(self.client.screenshot())
+        scene = vision.capture(self.client)
         point = self.idle.point(scene)
         if point is None:
             log("anti-idle: no safe grass patch found; skipped")

@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+.pytest-tmp/
+captures/
 *.egg-info/
 screenshot*.png
 # scratch/debug captures (keep assets/templates/ tracked)

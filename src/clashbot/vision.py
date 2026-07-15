@@ -20,6 +20,7 @@ Two kinds of template are supported:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 
 import cv2
 import numpy as np
@@ -34,7 +35,12 @@ REFERENCE_SIZE = (1280, 720)  # (width, height)
 def scale_for(scene: np.ndarray) -> float:
     """Factor to resize reference-resolution templates to match `scene`'s
     resolution (1.0 at 1280x720, 1.5 at 1920x1080, ...)."""
-    return scene.shape[1] / REFERENCE_SIZE[0]
+    # Use the limiting dimension. Width-only scaling over-sizes templates when
+    # an emulator adds letterboxing or exposes a non-16:9 viewport.
+    return min(
+        scene.shape[1] / REFERENCE_SIZE[0],
+        scene.shape[0] / REFERENCE_SIZE[1],
+    )
 
 
 @dataclass
@@ -59,6 +65,27 @@ def decode(png_bytes: bytes) -> np.ndarray:
     if img is None:
         raise ValueError("could not decode image bytes as PNG")
     return img
+
+
+def is_corrupt_frame(scene: np.ndarray, *, max_black_fraction: float = 0.18) -> bool:
+    """Detect MEmu frames with large pure-black, unrendered tile regions."""
+    if scene.size == 0:
+        return True
+    black = np.all(scene <= 2, axis=2)
+    return float(np.mean(black)) > max_black_fraction
+
+
+def capture(client, *, attempts: int = 4, delay: float = 0.4) -> np.ndarray:
+    """Capture a complete frame, retrying transient emulator render corruption."""
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    for attempt in range(attempts):
+        scene = decode(client.screenshot())
+        if not is_corrupt_frame(scene):
+            return scene
+        if attempt + 1 < attempts:
+            time.sleep(delay)
+    raise RuntimeError(f"emulator returned {attempts} corrupted screenshots")
 
 
 def load(path: str) -> np.ndarray:
@@ -98,6 +125,8 @@ def _match(scene: np.ndarray, template: np.ndarray,
 
 
 def _resized(template: np.ndarray, mask: np.ndarray | None, scale: float):
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError(f"scale must be a positive finite number, got {scale!r}")
     if scale == 1.0:
         return template, mask
     h, w = template.shape[:2]
@@ -135,7 +164,8 @@ def find(scene: np.ndarray, template: np.ndarray, *, name: str = "",
 
 def find_all(scene: np.ndarray, template: np.ndarray, *, name: str = "",
              threshold: float = 0.85, mask: np.ndarray | None = None,
-             min_gap: int | None = None, scale: float = 1.0) -> list[Match]:
+             min_gap: int | None = None, scale: float = 1.0,
+             scales: list[float] | tuple[float, ...] | None = None) -> list[Match]:
     """Return every match at or above `threshold`, de-duplicated so a single
     on-screen instance yields one hit (matchTemplate lights up a cluster of
     near-identical positions around each real match).
@@ -146,23 +176,32 @@ def find_all(scene: np.ndarray, template: np.ndarray, *, name: str = "",
     defaults to half the (scaled) template's smaller side. Results are sorted by
     score, best first.
     """
-    template, mask = _resized(template, mask, scale)
-    h, w = template.shape[:2]
-    if min_gap is None:
-        min_gap = min(w, h) // 2
+    requested_scales = list(scales) if scales is not None else [scale]
+    if not requested_scales:
+        raise ValueError("scales must contain at least one value")
 
-    result = _match(scene, template, mask)
-    ys, xs = np.where(result >= threshold)
-    candidates = sorted(
-        (Match(name=name, x=int(x), y=int(y), w=w, h=h, score=float(result[y, x]))
-         for x, y in zip(xs, ys)),
-        key=lambda m: m.score, reverse=True,
-    )
+    candidates: list[Match] = []
+    for candidate_scale in requested_scales:
+        resized, resized_mask = _resized(template, mask, candidate_scale)
+        h, w = resized.shape[:2]
+        result = _match(scene, resized, resized_mask)
+        ys, xs = np.where(result >= threshold)
+        candidates.extend(
+            Match(name=name, x=int(x), y=int(y), w=w, h=h,
+                  score=float(result[y, x]), scale=candidate_scale)
+            for x, y in zip(xs, ys)
+        )
+    candidates.sort(key=lambda m: m.score, reverse=True)
 
     kept: list[Match] = []
     for c in candidates:
         cx, cy = c.center
-        if all((cx - k.center[0]) ** 2 + (cy - k.center[1]) ** 2 >= min_gap ** 2 for k in kept):
+        candidate_gap = min_gap if min_gap is not None else max(1, min(c.w, c.h) // 2)
+        if all(
+            (cx - k.center[0]) ** 2 + (cy - k.center[1]) ** 2
+            >= max(candidate_gap, min(k.w, k.h) // 2) ** 2
+            for k in kept
+        ):
             kept.append(c)
     return kept
 

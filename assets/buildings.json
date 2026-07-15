@@ -1,5 +1,6 @@
 {
   "reference_size": [1280, 720],
+  "camera_scales": [0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35],
   "templates": [
     {
       "name": "town_hall_level_2",
@@ -36,10 +37,10 @@
   ],
   "ui": {
     "upgrade_hammer": {
-      "source": "../base_now.png",
-      "crop": [1188, 602, 1258, 674],
-      "threshold": 0.45,
-      "scales": [0.62, 0.72, 0.82, 0.92, 1.02]
+      "source": "templates/upgrade_hammer.png",
+      "crop": [0, 0, 78, 62],
+      "threshold": 0.72,
+      "scales": [0.90, 0.95, 1.00, 1.05, 1.10]
     }
   }
 }
