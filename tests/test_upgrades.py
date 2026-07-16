@@ -1,12 +1,14 @@
 """Upgrade recognition/state-machine tests; no emulator is required."""
 
 import random
+from pathlib import Path
 
 import cv2
 import numpy as np
 
 from clashbot import vision
 from clashbot.upgrades import BuildingTarget, SafeIdleTouch, UpgradeBot, UpgradeUi
+from clashbot.upgrades import BuildingRecognizer, ReferenceCatalog
 
 
 def _png(image):
@@ -148,3 +150,29 @@ def test_dry_run_only_takes_screenshot_and_reports_counts():
 
     assert result.found == {"town_hall": 1, "gold_storage": 1}
     assert bot.human.taps == []
+
+
+def test_live_base_catalog_recognizes_all_configured_categories():
+    """Each reference scene must retain coverage for templates sourced from it."""
+    catalog = ReferenceCatalog("assets/buildings.json")
+    for source in ("base_now.png", "assets/templates/base_current_live.png"):
+        resolved = str(Path(source).resolve())
+        expected = {
+            spec.category for spec in catalog.specs if spec.source == resolved
+        }
+        found = {
+            target.category
+            for target in BuildingRecognizer(catalog).find(vision.load(source))
+        }
+
+        assert expected <= found
+
+
+def test_custom_upgrade_priority_controls_target_order():
+    scene = np.full((720, 1280, 3), (45, 145, 85), dtype=np.uint8)
+    bot = _bot(scene, SuccessfulUi())
+    bot.priority = ("gold_storage", "town_hall")
+
+    targets = bot._targets(scene)
+
+    assert [target.category for target in targets] == ["gold_storage", "town_hall"]

@@ -3,6 +3,13 @@ __pycache__/
 .venv/
 .pytest-tmp/
 captures/
+assets/wiki_reference/
+assets/supercell_fankit/
+assets/source_cache/
+assets/derived_cache/
+/.tools/
+/.pytest-tmp-*/
+/.pytest_tmp*/
 *.egg-info/
 screenshot*.png
 # scratch/debug captures (keep assets/templates/ tracked)

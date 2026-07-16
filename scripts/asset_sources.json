@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "statscell_clash_assets",
+      "kind": "git",
+      "url": "https://github.com/Statscell/clash-assets.git",
+      "role": "labelled_townhall_builderhall_troop_pngs",
+      "license": "MIT repository license; Supercell artwork remains subject to Supercell Fan Content Policy",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "supercell_flat_converter",
+      "kind": "git_tool",
+      "url": "https://github.com/Daniil-SV/Supercell-Flat-Converter.git",
+      "role": "decode_supercell_flatbuffer_odin_gltf",
+      "license": "NO LICENSE FILE: local research tool only; do not vendor or redistribute",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "supercell_extractor",
+      "kind": "git_tool",
+      "url": "https://github.com/baraklevy20/Supercell-Extractor.git",
+      "role": "extract_2d_sc_textures_shapes_and_optional_movie_clips",
+      "license": "package.json declares ISC but repository has no LICENSE file: local tool only",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "coc_sc_extract_reference",
+      "kind": "git_reference",
+      "url": "https://github.com/dashroshan/coc-sc-extract.git",
+      "role": "reference_decoder_for_tex_sc_files",
+      "license": "NO LICENSE FILE: inspect locally only; do not copy into project",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "sc2fla_foss",
+      "kind": "git_tool",
+      "url": "https://github.com/GenericName1911/SC2FLA-FOSS-Edition.git",
+      "role": "decode_current_sc_and_sctx_and_dump_png_resources",
+      "license": "GPL-3.0; local isolated tool, generated game artwork is not redistributed",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "sc_downgrade",
+      "kind": "git_tool",
+      "url": "https://github.com/Daniil-SV/ScDowngrade.git",
+      "role": "downgrade_current_sc_v5_v6_for_2d_resource_tools",
+      "license": "MIT",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "sctx_converter",
+      "kind": "git_tool",
+      "url": "https://github.com/Daniil-SV/SCTX-Converter.git",
+      "role": "decode_current_sctx_texture_containers_to_png",
+      "license": "NO LICENSE FILE: local research tool only; do not vendor or redistribute",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "supercell_texture",
+      "kind": "git_tool",
+      "url": "https://github.com/sc-workshop/SupercellTexture.git",
+      "role": "current_sctx_schema_and_texture_decoder_library",
+      "license": "MIT",
+      "redistribute_assets": false,
+      "enabled": true
+    },
+    {
+      "id": "supercell_swf_animate",
+      "kind": "git_reference",
+      "url": "https://github.com/sc-workshop/SupercellSWF-Animate.git",
+      "role": "reference_only_reverse_fla_to_sc_export_path",
+      "license": "MIT; not installed because recognition is read-only and does not repack the game",
+      "redistribute_assets": false,
+      "enabled": true
+    }
+  ]
+}

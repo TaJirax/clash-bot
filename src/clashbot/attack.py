@@ -9,6 +9,8 @@ import numpy as np
 from . import vision
 from .adb_client import AdbClient
 from .human import HumanInput
+from .army import BattleTroopRecognizer, TroopCard
+from .paths import TEMPLATES_DIR
 
 
 @dataclass(frozen=True)
@@ -25,19 +27,33 @@ class FindMatchResult:
     returned_home: bool
 
 
+@dataclass(frozen=True)
+class BattleReadiness:
+    """Read-only evidence that an opponent screen is ready for deployment."""
+
+    verified: bool
+    troops: tuple[TroopCard, ...]
+
+
 class AttackUi:
     def __init__(
         self,
         button: np.ndarray | None = None,
         menu_anchor: np.ndarray | None = None,
         *,
-        button_path: str = "assets/templates/attack_button.png",
-        menu_path: str = "assets/templates/attack_menu_multiplayer.png",
-        find_match_path: str = "assets/templates/find_match_button.png",
-        army_path: str = "assets/templates/army_confirmation_anchor.png",
-        confirm_path: str = "assets/templates/confirm_find_match_button.png",
-        scout_path: str = "assets/templates/opponent_scout_end_battle.png",
+        button_path: str | None = None,
+        menu_path: str | None = None,
+        find_match_path: str | None = None,
+        army_path: str | None = None,
+        confirm_path: str | None = None,
+        scout_path: str | None = None,
     ):
+        button_path = button_path or str(TEMPLATES_DIR / "attack_button.png")
+        menu_path = menu_path or str(TEMPLATES_DIR / "attack_menu_multiplayer.png")
+        find_match_path = find_match_path or str(TEMPLATES_DIR / "find_match_button.png")
+        army_path = army_path or str(TEMPLATES_DIR / "army_confirmation_anchor.png")
+        confirm_path = confirm_path or str(TEMPLATES_DIR / "confirm_find_match_button.png")
+        scout_path = scout_path or str(TEMPLATES_DIR / "opponent_scout_end_battle.png")
         self.button = button if button is not None else vision.load(button_path)
         self.menu_anchor = menu_anchor if menu_anchor is not None else vision.load(menu_path)
         self.find_match = vision.load(find_match_path)
@@ -59,7 +75,11 @@ class AttackUi:
             roi,
             self.button,
             name="attack_button",
-            threshold=0.82,
+            # The notification badge (and its changing count) sits inside the
+            # captured button crop.  The button remains constrained to its
+            # distinctive lower-left ROI, so accept the verified live score
+            # while still rejecting unrelated orange controls.
+            threshold=0.80,
             scales=[vision.scale_for(scene) * value for value in (0.94, 1.0, 1.06)],
         )
         if match is not None:
@@ -101,7 +121,9 @@ class AttackUi:
 
     def find_army_confirmation(self, scene: np.ndarray) -> vision.Match | None:
         return self._find_control(
-            scene, self.army_confirmation, "army_confirmation", (0.25, 0.0, 0.75, 0.22)
+            # "My Army" is anchored at the upper-left on the current UI;
+            # its learned header crop extends beyond the old centre-only ROI.
+            scene, self.army_confirmation, "army_confirmation", (0.0, 0.0, 0.75, 0.22)
         )
 
     def find_confirm_match(self, scene: np.ndarray) -> vision.Match | None:
@@ -158,6 +180,12 @@ class FindMatchNavigator:
 
     def find(self, *, confirm: bool = False, return_home: bool = True) -> FindMatchResult:
         scene = self._screen()
+        # The command may be resumed after a safe previous run deliberately
+        # stopped on My Army.  Verify that known state instead of trying to
+        # reopen the home-village Attack menu.
+        army = self.ui.find_army_confirmation(scene)
+        if army is not None:
+            return self._continue_from_army(scene, confirm=confirm, return_home=return_home)
         if self.ui.find_menu(scene) is None:
             opened = AttackNavigator(self.client, self.ui, self.human).open()
             if not opened.opened:
@@ -177,6 +205,10 @@ class FindMatchNavigator:
             army = self.ui.find_army_confirmation(army_scene)
         if army is None:
             return FindMatchResult(False, False, False)
+        return self._continue_from_army(army_scene, confirm=confirm, return_home=return_home)
+
+    def _continue_from_army(self, army_scene: np.ndarray, *, confirm: bool,
+                            return_home: bool) -> FindMatchResult:
         if not confirm:
             return FindMatchResult(True, False, False)
 
@@ -201,3 +233,19 @@ class FindMatchNavigator:
         self.human.wait(2.0, 3.0)
         home = self.ui.is_home(self._screen())
         return FindMatchResult(True, True, home)
+
+
+class BattleInspector:
+    """Report battle readiness without selecting or deploying a troop."""
+
+    def __init__(self, client: AdbClient, ui: AttackUi | None = None,
+                 troops: BattleTroopRecognizer | None = None):
+        self.client = client
+        self.ui = ui or AttackUi()
+        self.troops = troops or BattleTroopRecognizer()
+
+    def inspect(self) -> BattleReadiness:
+        scene = vision.capture(self.client)
+        if self.ui.find_opponent_scout(scene) is None:
+            return BattleReadiness(False, ())
+        return BattleReadiness(True, tuple(self.troops.find(scene)))

@@ -31,6 +31,14 @@ from two prior projects:
 
 ## Assets
 
+The expanded local acquisition pipeline now inventories official Fan Kit art,
+labelled Statscell references, decoded installed-game texture banks, named SC
+compositions, and patched 3D models without committing third-party assets.
+See [docs/asset-acquisition.md](docs/asset-acquisition.md) for the exact
+read-only MEmu/APK workflow, provenance rules, current counts, and repeatable
+commands. Run `python scripts/report_asset_coverage.py` to inspect what the bot
+can query without loading image data.
+
 - `assets/templates/collect_*.png` — resource-collect bubbles cropped from
   real gameplay at MEmu's 1280x720. These drive `clashbot collect`; add a new
   bubble type by dropping in another `collect_*.png`.
@@ -58,6 +66,13 @@ from two prior projects:
   Root Access"; the app uses port 62001 for the first instance.
 
 ## Usage
+
+### Interactive notebook cells
+
+Open `notebooks/clashbot_control.py` in VS Code and choose **Run Cell** above
+each `# %%` block. It provides separate cells for device checks, screenshots,
+safe upgrade scans, attack navigation, battle inspection, and logged attacks.
+Set the `SERIAL` value in its setup cell to your emulator.
 
 ```
 python -m clashbot devices
@@ -130,6 +145,97 @@ menu. Record a video at the same emulator resolution, with taps visible if the
 emulator supports that option. Do not crop or resize the video. A future pass
 can then turn the demonstrated state graph into recognition templates and
 safe bot actions.
+
+## Capturing wiki references
+
+For original official artwork, prefer the Supercell fan-kit downloader. It
+enumerates both filter menus in the Clash of Clans fan kit: every Asset Type
+and every Characters value,
+downloads original PNG files (not browser thumbnails), organizes them by asset
+group, and records metadata plus SHA-256 hashes in a resumable manifest. Asset
+types are stored under `Asset Types/<type>/`; units, heroes, pets, and other
+named characters are stored under `Characters/<name>/`:
+
+```powershell
+# Safe one-file test
+python scripts/download_supercell_fankit.py --category Buildings --max-assets 1
+
+# Download all PNGs in the selected fan-kit categories
+python scripts/download_supercell_fankit.py
+
+# Bot-reference scope: Buildings plus every Character filter, sorted by level
+python scripts/download_supercell_fankit.py --category Buildings
+
+# Preview matches without downloading files
+python scripts/download_supercell_fankit.py --skip-asset-types --character Balloon --dry-run --max-assets 20
+```
+
+
+Output defaults to `assets/supercell_fankit/` and is ignored by Git because it
+can be large. Re-running skips completed paths; use `--refresh` to replace
+them. It uses Supercell's public fan-kit listing and the same original-file
+endpoint as its Download button, so Opera tabs are not needed. Review the
+linked Fan Content Policy before redistributing files.
+
+If an asset is assigned to more than one group, it appears in every matching
+category folder. On Windows these entries use hard links when possible, so the
+PNG data consumes disk space only once.
+
+Building and character titles containing `level`, `lvl`, or a trailing numeric
+level are placed in `Level <n>/` subfolders. Artwork without a trustworthy
+level marker is retained under `Unsorted/` for later review.
+
+The optional `scripts/capture_coc_wiki.py` tool opens a visible Opera GX window
+on your own network and captures permanent troop, hero, spell, siege, pet,
+building, and trap pages from the Clash of Clans Wiki. Every discovered entry
+opens in a visible tab, is recorded, and then closes before the next entry.
+Pages and meaningful image elements are rendered at exactly 130% CSS zoom and
+2x device scale.
+
+```powershell
+python -m pip install -e ".[wiki-capture]"
+python scripts/capture_coc_wiki.py
+```
+
+The default mode detects Opera GX and starts a separate automation window with
+its own profile under `assets/wiki_reference/.opera-profile`. It does not read,
+close, or navigate the tabs in your normal Opera profile, so your already-open
+browser can remain running. Pass `--opera-path "C:\path\to\opera.exe"` only if
+automatic detection fails.
+
+If Cloudflare displays a verification page, solve it in the visible browser
+and press Enter in the terminal. The script does not bypass verification. It
+uses a persistent browser profile, waits at least two seconds between pages,
+records source URLs and metadata, and resumes completed pages after restart.
+Output defaults to `assets/wiki_reference/` and is ignored by Git because the
+screenshots are large, third-party reference material. Review the wiki's terms
+and licenses before sharing or redistributing captures.
+
+Useful scope controls:
+
+```powershell
+# Small test run
+python scripts/capture_coc_wiki.py --category Troops --max-pages 5
+
+# Add deeper/custom categories
+python scripts/capture_coc_wiki.py --category Buildings --category "Siege Machines" --category-depth 2
+
+# Re-capture existing pages
+python scripts/capture_coc_wiki.py --refresh
+
+# Optional: use Playwright's bundled Chromium instead of Opera
+python -m playwright install chromium
+python scripts/capture_coc_wiki.py --browser chromium
+```
+
+Advanced attach mode is available if you intentionally launch Opera with a
+remote-debugging port. The collector still creates and closes only its own
+tabs:
+
+```powershell
+& "C:\Users\you\AppData\Local\Programs\Opera GX\opera.exe" --remote-debugging-port=9222
+python scripts/capture_coc_wiki.py --cdp-url http://127.0.0.1:9222
+```
 
 Building recognition now sweeps camera zoom factors from 0.35x through 1.35x,
 configured by

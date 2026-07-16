@@ -150,7 +150,11 @@ def controller_from_catalog(
     # Mapping scans use a coarser sweep for speed. Camera verification needs a
     # finer scale ruler because a single Ctrl+wheel/MEmu notch is only a small
     # visual change.
-    catalog.camera_scales = tuple(0.30 + index * 0.025 for index in range(45))
+    catalog.camera_scales = (
+        0.25, 0.30, 0.38, 0.46, 0.55, 0.65, 0.75, 0.85,
+        0.95, 1.00, 1.05, 1.15, 1.25, 1.35, 1.45, 1.60,
+        1.80, 2.00,
+    )
     return CameraZoomController(
         client,
         BuildingRecognizer(catalog),

@@ -66,6 +66,52 @@ def cmd_menu_capture(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_recognize_army(args: argparse.Namespace) -> None:
+    """Report learned troop portraits on the current Barracks army screen."""
+    from . import vision
+    from .army import TroopRecognizer
+
+    scene = vision.decode(adb_client.AdbClient(args.serial).screenshot())
+    cards = TroopRecognizer(args.templates, threshold=args.threshold).find(scene)
+    if not cards:
+        print("no learned troop cards found", file=sys.stderr)
+        sys.exit(2)
+    for card in cards:
+        print(f"{card.name} at ({card.x}, {card.y}), score={card.score:.3f}")
+
+
+def cmd_check_state(args: argparse.Namespace) -> None:
+    """Report the current learned game-menu state without tapping."""
+    from . import vision
+    from .menus import MenuRecognizer
+
+    state = MenuRecognizer(args.templates, threshold=args.threshold).classify(
+        vision.decode(adb_client.AdbClient(args.serial).screenshot())
+    )
+    if state is None:
+        print("current screen is not a learned menu state", file=sys.stderr)
+        sys.exit(2)
+    print(f"state={state.name}, score={state.score:.3f}")
+
+
+def cmd_manage_status(args: argparse.Namespace) -> None:
+    """Inspect verified base-management evidence without tapping."""
+    from . import vision
+    from .base_management import BaseManagementInspector
+    from .upgrades import ReferenceCatalog
+
+    status = BaseManagementInspector(ReferenceCatalog(args.catalog)).inspect(
+        vision.capture(adb_client.AdbClient(args.serial))
+    )
+    print(f"recognized_buildings={status.recognized_buildings}")
+    print(f"menu_state={status.menu_state or 'none'}")
+    print(f"builders_available={status.builders_available if status.builders_available is not None else 'unverified'}")
+    print(f"research_available={status.research_available if status.research_available is not None else 'unverified'}")
+    print(f"upgrade_affordable={status.upgrade_affordable if status.upgrade_affordable is not None else 'unverified'}")
+    print(f"boost_auras={status.boost_auras} (informational; not a click target)")
+    print(status.next_step)
+
+
 def cmd_tap(args: argparse.Namespace) -> None:
     client = adb_client.AdbClient(args.serial)
     if args.raw:
@@ -229,6 +275,56 @@ def cmd_map_base(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_scan_base(args: argparse.Namespace) -> None:
+    """Let the bot capture and recover its own live base observations."""
+    from .autonomy import AutonomousBaseScanner
+    from .camera import controller_from_catalog
+    from .fankit import FanKitIndex
+    from .multitouch import AdbPinchZoom
+    from .upgrades import BuildingRecognizer, ReferenceCatalog
+
+    route = [part.strip().lower() for part in args.route.split(",") if part.strip()]
+    if any(part not in ("up", "down", "left", "right") for part in route):
+        print("route must contain only up, down, left, right", file=sys.stderr)
+        sys.exit(2)
+    client = adb_client.AdbClient(args.serial)
+    catalog = ReferenceCatalog(args.catalog)
+    recognizer = BuildingRecognizer(catalog)
+    zoom = controller_from_catalog(
+        client, args.catalog, actuator=AdbPinchZoom(client)
+    )
+    # Share recognition state so a measured scale is reused by capture, zoom,
+    # and subsequent panned views.
+    zoom.recognizer = recognizer
+    scanner = AutonomousBaseScanner(
+        client,
+        recognizer,
+        zoom=zoom,
+        fankit=FanKitIndex(args.fankit),
+        root=args.root,
+    )
+    report = scanner.run(
+        args.session,
+        route=route,
+        min_detections=args.min_detections,
+        min_categories=args.min_categories,
+    )
+    print(f"bot captured {len(report.views)} view(s); best=view {report.best_view}")
+    print("buildings=" + (", ".join(
+        f"{name}:{count}" for name, count in sorted(report.counts.items())
+    ) or "none"))
+    covered = sum(1 for count in report.reference_assets.values() if count)
+    print(
+        f"Fan Kit semantic coverage={covered}/{len(report.counts)} detected categories; "
+        f"recovery={', '.join(report.recovery_actions) or 'not needed'}"
+    )
+    if report.blocked_reason:
+        print(f"blocked={report.blocked_reason}", file=sys.stderr)
+    if report.unresolved_categories:
+        print("unresolved=" + ", ".join(report.unresolved_categories))
+    print(f"report={scanner.root / args.session / 'report.json'}")
+
+
 def cmd_find_building(args: argparse.Namespace) -> None:
     from .navigation import CameraPanController
     from .upgrades import BuildingRecognizer, ReferenceCatalog
@@ -317,6 +413,37 @@ def cmd_find_match(args: argparse.Namespace) -> None:
     else:
         print("opponent found, but safe return home was not verified", file=sys.stderr)
         sys.exit(2)
+
+
+def cmd_check_battle(args: argparse.Namespace) -> None:
+    """Report verified opponent-screen controls and currently deployable troops."""
+    from .attack import BattleInspector
+
+    result = BattleInspector(adb_client.AdbClient(args.serial)).inspect()
+    if not result.verified:
+        print("opponent battle screen was not verified", file=sys.stderr)
+        sys.exit(2)
+    if not result.troops:
+        print("opponent screen verified; no learned deployable troops found")
+        return
+    print("opponent screen verified; deployable troops:")
+    for card in result.troops:
+        print(f"- {card.name} at ({card.x}, {card.y}), score={card.score:.3f}")
+
+
+def cmd_loot_attack(args: argparse.Namespace) -> None:
+    """Deploy a small verified wave and persist screenshots/events for learning."""
+    from .attack_execution import LootAttackExecutor
+
+    try:
+        result = LootAttackExecutor(adb_client.AdbClient(args.serial)).run(
+            session=args.session, root=args.root, aggressive=args.aggressive,
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
+    print(f"deployed {len(result.deployed)} recognised troops: {', '.join(result.deployed)}")
+    print(f"attack evidence -> {result.log_path}")
 
 
 def cmd_check_upgrade_ui(args: argparse.Namespace) -> None:
@@ -420,7 +547,8 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     from .upgrades import UpgradeBot
 
     client = adb_client.AdbClient(args.serial)
-    bot = UpgradeBot(client, catalog_path=args.catalog)
+    priority = [part.strip() for part in args.priority.split(",") if part.strip()]
+    bot = UpgradeBot(client, catalog_path=args.catalog, priority=priority or None)
     try:
         completed = bot.run(
             scans=args.scans,
@@ -514,6 +642,20 @@ def main() -> None:
     p.add_argument("--root", default="captures/maps")
     p.set_defaults(func=cmd_map_base)
 
+    p = sub.add_parser(
+        "scan-base",
+        help="autonomously capture, recover camera, and recognize the live base",
+    )
+    p.add_argument("serial")
+    p.add_argument("session")
+    p.add_argument("--route", default="right,left,up,down")
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.add_argument("--fankit", default="assets/supercell_fankit")
+    p.add_argument("--root", default="captures/autonomous")
+    p.add_argument("--min-detections", type=int, default=14)
+    p.add_argument("--min-categories", type=int, default=8)
+    p.set_defaults(func=cmd_scan_base)
+
     p = sub.add_parser("find-building", help="search camera views for a building category")
     p.add_argument("serial")
     p.add_argument("category", help="e.g. town_hall, gold_mine, elixir_collector")
@@ -533,6 +675,18 @@ def main() -> None:
     p.add_argument("--stay", action="store_true",
                    help="leave opponent scouting open; deployment countdown continues")
     p.set_defaults(func=cmd_find_match)
+
+    p = sub.add_parser("check-battle", help="verify opponent battle HUD and report deployable troops")
+    p.add_argument("serial")
+    p.set_defaults(func=cmd_check_battle)
+
+    p = sub.add_parser("loot-attack", help="deploy a small verified loot wave and save attack evidence")
+    p.add_argument("serial")
+    p.add_argument("session", help="unique evidence-log session name")
+    p.add_argument("--root", default="captures/attacks")
+    p.add_argument("--aggressive", action="store_true",
+                   help="deploy a larger recognised wave for a test-account attack")
+    p.set_defaults(func=cmd_loot_attack)
 
     p = sub.add_parser("check-upgrade-ui",
                        help="verify hammer and resource button without upgrading")
@@ -567,6 +721,23 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true", help="report bubbles without tapping")
     p.set_defaults(func=cmd_collect)
 
+    p = sub.add_parser("recognize-army", help="report learned troop cards without tapping")
+    p.add_argument("serial")
+    p.add_argument("--templates", default="assets/templates")
+    p.add_argument("--threshold", type=float, default=0.86)
+    p.set_defaults(func=cmd_recognize_army)
+
+    p = sub.add_parser("check-state", help="recognize a learned menu state without tapping")
+    p.add_argument("serial")
+    p.add_argument("--templates", default="assets/templates")
+    p.add_argument("--threshold", type=float, default=0.86)
+    p.set_defaults(func=cmd_check_state)
+
+    p = sub.add_parser("manage-status", help="report verified base-management state without tapping")
+    p.add_argument("serial")
+    p.add_argument("--catalog", default="assets/buildings.json")
+    p.set_defaults(func=cmd_manage_status)
+
     p = sub.add_parser(
         "upgrade",
         help="recognise buildings and attempt upgrades in priority order",
@@ -590,6 +761,11 @@ def main() -> None:
                    help="maximum seconds between anti-idle touches")
     p.add_argument("--catalog", default="assets/buildings.json",
                    help="building/reference JSON catalog")
+    p.add_argument(
+        "--priority",
+        default="",
+        help="comma-separated upgrade order, e.g. town_hall,gold_storage,cannon",
+    )
     p.add_argument("--dry-run", action="store_true",
                    help="recognise and report only; do not tap")
     p.set_defaults(func=cmd_upgrade)

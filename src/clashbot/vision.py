@@ -165,7 +165,8 @@ def find(scene: np.ndarray, template: np.ndarray, *, name: str = "",
 def find_all(scene: np.ndarray, template: np.ndarray, *, name: str = "",
              threshold: float = 0.85, mask: np.ndarray | None = None,
              min_gap: int | None = None, scale: float = 1.0,
-             scales: list[float] | tuple[float, ...] | None = None) -> list[Match]:
+             scales: list[float] | tuple[float, ...] | None = None,
+             max_matches: int | None = None) -> list[Match]:
     """Return every match at or above `threshold`, de-duplicated so a single
     on-screen instance yields one hit (matchTemplate lights up a cluster of
     near-identical positions around each real match).
@@ -179,13 +180,27 @@ def find_all(scene: np.ndarray, template: np.ndarray, *, name: str = "",
     requested_scales = list(scales) if scales is not None else [scale]
     if not requested_scales:
         raise ValueError("scales must contain at least one value")
+    if max_matches is not None and max_matches < 1:
+        raise ValueError("max_matches must be positive")
 
     candidates: list[Match] = []
     for candidate_scale in requested_scales:
         resized, resized_mask = _resized(template, mask, candidate_scale)
         h, w = resized.shape[:2]
         result = _match(scene, resized, resized_mask)
-        ys, xs = np.where(result >= threshold)
+        if max_matches is None:
+            ys, xs = np.where(result >= threshold)
+        else:
+            # At relaxed thresholds matchTemplate can produce thousands of
+            # adjacent pixels for one object. Keep only spatial local maxima;
+            # this avoids sorting/allocating the entire plateau when callers
+            # only need a bounded number of buildings.
+            gap = min_gap if min_gap is not None else max(1, min(w, h) // 2)
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_RECT, (2 * gap + 1, 2 * gap + 1)
+            )
+            maxima = cv2.dilate(result, kernel)
+            ys, xs = np.where((result >= threshold) & (result >= maxima - 1e-7))
         candidates.extend(
             Match(name=name, x=int(x), y=int(y), w=w, h=h,
                   score=float(result[y, x]), scale=candidate_scale)
@@ -203,6 +218,8 @@ def find_all(scene: np.ndarray, template: np.ndarray, *, name: str = "",
             for k in kept
         ):
             kept.append(c)
+            if max_matches is not None and len(kept) >= max_matches:
+                break
     return kept
 
 

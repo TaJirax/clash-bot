@@ -1,38 +1,414 @@
 {
   "reference_size": [1280, 720],
-  "camera_scales": [0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95, 1.05, 1.15, 1.25, 1.35],
+  "camera_scales": [0.55, 0.65, 0.75, 0.85, 0.95, 1.00, 1.05, 1.15, 1.25, 1.35, 1.45],
   "templates": [
     {
-      "name": "town_hall_level_2",
+      "name": "town_hall_live",
       "category": "town_hall",
       "source": "../base_now.png",
-      "crop": [580, 245, 745, 375],
-      "threshold": 0.82,
+      "crop": [570, 285, 720, 435],
+      "threshold": 0.80,
       "max_matches": 1
     },
     {
-      "name": "gold_mine_level_1",
-      "category": "gold_mine",
-      "source": "../base_now.png",
-      "crop": [710, 175, 804, 232],
-      "threshold": 0.60,
-      "max_matches": 7
-    },
-    {
-      "name": "elixir_collector_level_1",
-      "category": "elixir_collector",
-      "source": "../base_now.png",
-      "crop": [482, 354, 568, 430],
-      "threshold": 0.62,
-      "max_matches": 7
-    },
-    {
-      "name": "gold_storage_level_1",
+      "name": "gold_storage_live",
       "category": "gold_storage",
       "source": "../base_now.png",
-      "crop": [414, 102, 530, 215],
-      "threshold": 0.70,
+      "crop": [370, 155, 470, 245],
+      "threshold": 0.78,
       "max_matches": 4
+    },
+    {
+      "name": "gold_mine_live",
+      "category": "gold_mine",
+      "source": "../base_now.png",
+      "crop": [875, 250, 970, 325],
+      "threshold": 0.78,
+      "max_matches": 7
+    },
+    {
+      "name": "elixir_collector_live",
+      "category": "elixir_collector",
+      "source": "../base_now.png",
+      "crop": [500, 420, 580, 500],
+      "threshold": 0.75,
+      "max_matches": 7
+    },
+    {
+      "name": "elixir_storage_live",
+      "category": "elixir_storage",
+      "source": "../base_now.png",
+      "crop": [770, 330, 850, 410],
+      "threshold": 0.88,
+      "max_matches": 4
+    },
+    {
+      "name": "cannon_live",
+      "category": "cannon",
+      "source": "../base_now.png",
+      "crop": [880, 360, 970, 435],
+      "threshold": 0.80,
+      "max_matches": 4
+    },
+    {
+      "name": "mortar_live",
+      "category": "mortar",
+      "source": "../base_now.png",
+      "crop": [565, 220, 650, 305],
+      "threshold": 0.80,
+      "max_matches": 1
+    },
+    {
+      "name": "archer_tower_live",
+      "category": "archer_tower",
+      "source": "../base_now.png",
+      "crop": [340, 200, 420, 330],
+      "threshold": 0.80,
+      "max_matches": 2
+    },
+    {
+      "name": "barracks_live",
+      "category": "barracks",
+      "source": "../base_now.png",
+      "crop": [180, 300, 300, 410],
+      "threshold": 0.80,
+      "max_matches": 1
+    },
+    {
+      "name": "laboratory_live",
+      "category": "laboratory",
+      "source": "../base_now.png",
+      "crop": [845, 100, 950, 210],
+      "threshold": 0.80,
+      "max_matches": 1
+    },
+    {
+      "name": "gold_storage_lower_live",
+      "category": "gold_storage",
+      "source": "../base_now.png",
+      "crop": [365, 335, 475, 455],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "gold_mine_upper_live",
+      "category": "gold_mine",
+      "source": "../base_now.png",
+      "crop": [755, 175, 870, 285],
+      "threshold": 0.82,
+      "max_matches": 3
+    },
+    {
+      "name": "gold_mine_lower_live",
+      "category": "gold_mine",
+      "source": "../base_now.png",
+      "crop": [835, 470, 965, 585],
+      "threshold": 0.82,
+      "max_matches": 3
+    },
+    {
+      "name": "elixir_storage_upper_live",
+      "category": "elixir_storage",
+      "source": "../base_now.png",
+      "crop": [775, 275, 885, 375],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "elixir_storage_lower_live",
+      "category": "elixir_storage",
+      "source": "../base_now.png",
+      "crop": [755, 385, 865, 495],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "cannon_left_live",
+      "category": "cannon",
+      "source": "../base_now.png",
+      "crop": [465, 290, 575, 395],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "builder_hut_upper_live",
+      "category": "builder_hut",
+      "source": "../base_now.png",
+      "crop": [665, 105, 760, 215],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "builder_hut_lower_live",
+      "category": "builder_hut",
+      "source": "../base_now.png",
+      "crop": [665, 555, 760, 680],
+      "threshold": 0.82,
+      "max_matches": 2
+    },
+    {
+      "name": "army_camp_lower_live",
+      "category": "army_camp",
+      "source": "../base_now.png",
+      "crop": [270, 475, 355, 565],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "army_camp_upper_live",
+      "category": "army_camp",
+      "source": "../base_now.png",
+      "crop": [555, 20, 640, 105],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "bomb_upper_live",
+      "category": "bomb",
+      "source": "../base_now.png",
+      "crop": [748, 240, 792, 292],
+      "threshold": 0.86,
+      "max_matches": 2
+    },
+    {
+      "name": "bomb_lower_live",
+      "category": "bomb",
+      "source": "../base_now.png",
+      "crop": [900, 450, 945, 510],
+      "threshold": 0.86,
+      "max_matches": 2
+    },
+    {
+      "name": "wall_northeast_live",
+      "category": "wall",
+      "source": "../base_now.png",
+      "crop": [300, 190, 340, 235],
+      "threshold": 0.88,
+      "max_matches": 50
+    },
+    {
+      "name": "wall_southeast_live",
+      "category": "wall",
+      "source": "../base_now.png",
+      "crop": [475, 120, 520, 165],
+      "threshold": 0.88,
+      "max_matches": 50
+    },
+    {
+      "name": "current_town_hall",
+      "category": "town_hall",
+      "source": "templates/base_current_live.png",
+      "crop": [580, 260, 710, 390],
+      "threshold": 0.72,
+      "max_matches": 1
+    },
+    {
+      "name": "current_gold_storage_upper",
+      "category": "gold_storage",
+      "source": "templates/base_current_live.png",
+      "crop": [470, 155, 565, 245],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_gold_storage_lower",
+      "category": "gold_storage",
+      "source": "templates/base_current_live.png",
+      "crop": [420, 300, 515, 390],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_gold_mine_upper_left",
+      "category": "gold_mine",
+      "source": "templates/base_current_live.png",
+      "crop": [690, 180, 770, 260],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_gold_mine_upper_right",
+      "category": "gold_mine",
+      "source": "templates/base_current_live.png",
+      "crop": [770, 210, 860, 290],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_gold_mine_lower",
+      "category": "gold_mine",
+      "source": "templates/base_current_live.png",
+      "crop": [750, 380, 850, 460],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_elixir_collector_left",
+      "category": "elixir_collector",
+      "source": "templates/base_current_live.png",
+      "crop": [515, 310, 590, 395],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_elixir_collector_center",
+      "category": "elixir_collector",
+      "source": "templates/base_current_live.png",
+      "crop": [580, 365, 665, 455],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_elixir_collector_lower",
+      "category": "elixir_collector",
+      "source": "templates/base_current_live.png",
+      "crop": [680, 415, 770, 515],
+      "threshold": 0.84,
+      "max_matches": 3
+    },
+    {
+      "name": "current_elixir_storage_upper",
+      "category": "elixir_storage",
+      "source": "templates/base_current_live.png",
+      "crop": [700, 245, 795, 330],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_elixir_storage_lower",
+      "category": "elixir_storage",
+      "source": "templates/base_current_live.png",
+      "crop": [685, 325, 785, 410],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_cannon_left",
+      "category": "cannon",
+      "source": "templates/base_current_live.png",
+      "crop": [490, 255, 565, 330],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_cannon_right",
+      "category": "cannon",
+      "source": "templates/base_current_live.png",
+      "crop": [800, 295, 880, 370],
+      "threshold": 0.84,
+      "max_matches": 2
+    },
+    {
+      "name": "current_mortar",
+      "category": "mortar",
+      "source": "templates/base_current_live.png",
+      "crop": [565, 215, 640, 290],
+      "threshold": 0.84,
+      "max_matches": 1
+    },
+    {
+      "name": "current_archer_tower",
+      "category": "archer_tower",
+      "source": "templates/base_current_live.png",
+      "crop": [415, 200, 485, 290],
+      "threshold": 0.84,
+      "max_matches": 1
+    },
+    {
+      "name": "current_barracks",
+      "category": "barracks",
+      "source": "templates/base_current_live.png",
+      "crop": [300, 255, 395, 355],
+      "threshold": 0.84,
+      "max_matches": 1
+    },
+    {
+      "name": "current_laboratory",
+      "category": "laboratory",
+      "source": "templates/base_current_live.png",
+      "crop": [750, 120, 845, 215],
+      "threshold": 0.76,
+      "max_matches": 1
+    },
+    {
+      "name": "current_builder_hut_upper",
+      "category": "builder_hut",
+      "source": "templates/base_current_live.png",
+      "crop": [635, 140, 705, 215],
+      "threshold": 0.74,
+      "max_matches": 2
+    },
+    {
+      "name": "current_builder_hut_lower",
+      "category": "builder_hut",
+      "source": "templates/base_current_live.png",
+      "crop": [635, 445, 705, 525],
+      "threshold": 0.74,
+      "max_matches": 2
+    },
+    {
+      "name": "current_army_camp_upper",
+      "category": "army_camp",
+      "source": "templates/base_current_live.png",
+      "crop": [530, 35, 635, 130],
+      "threshold": 0.86,
+      "max_matches": 2
+    },
+    {
+      "name": "current_army_camp_lower",
+      "category": "army_camp",
+      "source": "templates/base_current_live.png",
+      "crop": [335, 370, 455, 475],
+      "threshold": 0.86,
+      "max_matches": 2
+    },
+    {
+      "name": "current_bomb_upper",
+      "category": "bomb",
+      "source": "templates/base_current_live.png",
+      "crop": [682, 220, 728, 275],
+      "threshold": 0.88,
+      "max_matches": 2
+    },
+    {
+      "name": "current_bomb_lower",
+      "category": "bomb",
+      "source": "templates/base_current_live.png",
+      "crop": [790, 345, 840, 400],
+      "threshold": 0.88,
+      "max_matches": 2
+    },
+    {
+      "name": "current_hero_hall",
+      "category": "hero_hall",
+      "source": "templates/base_current_live.png",
+      "crop": [910, 205, 1020, 345],
+      "threshold": 0.86,
+      "max_matches": 1
+    },
+    {
+      "name": "current_clan_castle_ruin",
+      "category": "clan_castle",
+      "source": "templates/base_current_live.png",
+      "crop": [420, 495, 520, 610],
+      "threshold": 0.80,
+      "max_matches": 1
+    },
+    {
+      "name": "current_wall_northeast",
+      "category": "wall",
+      "source": "templates/base_current_live.png",
+      "crop": [375, 235, 415, 275],
+      "threshold": 0.90,
+      "max_matches": 50
+    },
+    {
+      "name": "current_wall_southeast",
+      "category": "wall",
+      "source": "templates/base_current_live.png",
+      "crop": [470, 145, 515, 185],
+      "threshold": 0.90,
+      "max_matches": 50
     }
   ],
   "ui": {

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import statistics
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +31,7 @@ import cv2
 import numpy as np
 
 from . import vision
+from .paths import BUILDING_CATALOG
 from .adb_client import AdbClient
 from .human import HumanInput
 
@@ -46,7 +48,10 @@ PRIORITY = (
 )
 
 # Avoid the player badge, resource bars, side buttons, shop, and attack button.
-VILLAGE_FRAC = (0.10, 0.08, 0.84, 0.82)
+# The playable village can reach close to the right-side camera controls and
+# the bottom build controls.  Keep those controls outside the ROI while still
+# allowing buildings at the edge of a zoomed-out or panned view to be found.
+VILLAGE_FRAC = (0.08, 0.10, 0.94, 0.89)
 TOOLBAR_FRAC = (0.16, 0.64, 0.84, 0.94)
 
 
@@ -93,8 +98,8 @@ class ScanResult:
 class ReferenceCatalog:
     """Loads building/UI crops described by a JSON catalog."""
 
-    def __init__(self, path: str = "assets/buildings.json"):
-        self.path = Path(path)
+    def __init__(self, path: str | os.PathLike[str] | None = None):
+        self.path = Path(path) if path is not None else BUILDING_CATALOG
         with self.path.open("r", encoding="utf-8") as f:
             data = json.load(f)
         self.base_dir = self.path.resolve().parent
@@ -107,10 +112,10 @@ class ReferenceCatalog:
             raise ValueError("camera_scales must contain positive values")
         self.specs = [self._building_spec(item) for item in data.get("templates", [])]
         if not self.specs:
-            raise ValueError(f"no building templates configured in {path!r}")
+            raise ValueError(f"no building templates configured in {self.path!r}")
         ui = data.get("ui", {}).get("upgrade_hammer")
         if not ui:
-            raise ValueError(f"no ui.upgrade_hammer configured in {path!r}")
+            raise ValueError(f"no ui.upgrade_hammer configured in {self.path!r}")
         self.ui_spec = UiSpec(
             source=self._resolve(ui["source"]),
             crop=self._crop(ui["crop"]),
@@ -161,6 +166,72 @@ class BuildingRecognizer:
     def __init__(self, catalog: ReferenceCatalog):
         self.catalog = catalog
         self.templates = [(spec, catalog.crop(spec.source, spec.crop)) for spec in catalog.specs]
+        # Different reference screenshots can have different source zooms.
+        # Remember a scale per source instead of forcing every template onto a
+        # single ruler.
+        self._last_camera_scales: dict[str, float] = {}
+
+    def _anchor_templates(
+        self,
+        templates: list[tuple[TemplateSpec, np.ndarray]],
+    ) -> list[tuple[TemplateSpec, np.ndarray]]:
+        """Return a small, diverse scale ruler for the first frame.
+
+        Searching every building at every scale made a single frame take tens
+        of seconds. A few large, visually distinct structures are enough to
+        estimate the common camera scale; the complete catalog is then searched
+        only near that scale.
+        """
+        preferred = (
+            "town_hall", "gold_storage", "elixir_storage", "laboratory",
+            "barracks", "mortar", "archer_tower", "builder_hut",
+        )
+        chosen: list[tuple[TemplateSpec, np.ndarray]] = []
+        used: set[str] = set()
+        for category in preferred:
+            for item in templates:
+                if item[0].category == category and category not in used:
+                    chosen.append(item)
+                    used.add(category)
+                    break
+        return chosen or templates[:8]
+
+    def _candidates(
+        self,
+        scene: np.ndarray,
+        scales: list[float],
+        templates: list[tuple[TemplateSpec, np.ndarray]] | None = None,
+    ) -> list[tuple[TemplateSpec, vision.Match]]:
+        h, w = scene.shape[:2]
+        vx1, vy1, vx2, vy2 = VILLAGE_FRAC
+        ox, oy = int(vx1 * w), int(vy1 * h)
+        x2, y2 = int(vx2 * w), int(vy2 * h)
+        village = scene[oy:y2, ox:x2]
+        candidates: list[tuple[TemplateSpec, vision.Match]] = []
+        for spec, template in templates or self.templates:
+            hits = vision.find_all(
+                village,
+                template,
+                name=spec.name,
+                threshold=spec.threshold,
+                scales=scales,
+                max_matches=spec.max_matches,
+            )
+            for hit in hits:
+                hit.x += ox
+                hit.y += oy
+            candidates.extend((spec, hit) for hit in hits)
+        return candidates
+
+    @staticmethod
+    def _scale_from(candidates: list[tuple[TemplateSpec, vision.Match]],
+                    resolution_scale: float) -> float | None:
+        if not candidates:
+            return None
+        strongest = sorted(candidates, key=lambda pair: pair[1].score, reverse=True)[:12]
+        return float(statistics.median(
+            hit.scale / resolution_scale for _spec, hit in strongest
+        ))
 
     def find(self, scene: np.ndarray) -> list[BuildingTarget]:
         h, w = scene.shape[:2]
@@ -168,25 +239,63 @@ class BuildingRecognizer:
             w / self.catalog.reference_size[0],
             h / self.catalog.reference_size[1],
         )
-        scales = [resolution_scale * value for value in self.catalog.camera_scales]
-        vx1, vy1, vx2, vy2 = VILLAGE_FRAC
-        bounds = (vx1 * w, vy1 * h, vx2 * w, vy2 * h)
-
         candidates: list[tuple[TemplateSpec, vision.Match]] = []
-        for spec, template in self.templates:
-            hits = vision.find_all(
-                scene,
-                template,
-                name=spec.name,
-                threshold=spec.threshold,
-                scales=scales,
-            )
-            accepted = []
-            for hit in hits:
-                cx, cy = hit.center
-                if bounds[0] <= cx <= bounds[2] and bounds[1] <= cy <= bounds[3]:
-                    accepted.append(hit)
-            candidates.extend((spec, hit) for hit in accepted[:spec.max_matches])
+        grouped: dict[str, list[tuple[TemplateSpec, np.ndarray]]] = {}
+        for item in self.templates:
+            grouped.setdefault(item[0].source, []).append(item)
+
+        rulers = list(self.catalog.camera_scales[::2])
+        if self.catalog.camera_scales[-1] not in rulers:
+            rulers.append(self.catalog.camera_scales[-1])
+        recovery_values = sorted(set(
+            self.catalog.camera_scales
+            + (0.25, 0.30, 0.38, 0.46, 1.55, 1.70, 1.85, 2.00)
+        ))
+
+        for source, source_templates in grouped.items():
+            remembered = self._last_camera_scales.get(source)
+            if remembered is None:
+                anchor_hits = self._candidates(
+                    scene,
+                    [resolution_scale * value for value in rulers],
+                    self._anchor_templates(source_templates),
+                )
+                remembered = self._scale_from(anchor_hits, resolution_scale)
+
+            source_hits: list[tuple[TemplateSpec, vision.Match]] = []
+            if remembered is not None:
+                local_scales = sorted({
+                    resolution_scale * remembered * factor
+                    for factor in (0.96, 1.0, 1.04)
+                })
+                source_hits = self._candidates(
+                    scene, local_scales, source_templates
+                )
+
+            source_categories = {spec.category for spec, _hit in source_hits}
+            if len(source_hits) < 2 or len(source_categories) < 2:
+                source_hits = self._candidates(
+                    scene,
+                    [resolution_scale * value for value in recovery_values],
+                    source_templates,
+                )
+
+            measured = self._scale_from(source_hits, resolution_scale)
+            if measured is not None:
+                self._last_camera_scales[source] = measured
+            candidates.extend(source_hits)
+
+        if not candidates:
+            # A malformed/empty source group should not permanently poison the
+            # stateful fast path.
+            self._last_camera_scales.clear()
+
+        # Keep a single property for diagnostics written before per-source
+        # scale tracking was introduced.
+        self._last_camera_scale = (
+            float(statistics.median(self._last_camera_scales.values()))
+            if self._last_camera_scales else None
+        )
 
         # De-duplicate overlapping reference crops, including two templates for
         # adjacent levels of the same physical building.
@@ -315,7 +424,8 @@ class SafeIdleTouch:
 
 class UpgradeBot:
     def __init__(self, client: AdbClient, *, catalog_path: str = "assets/buildings.json",
-                 human: HumanInput | None = None, rng: random.Random | None = None):
+                 human: HumanInput | None = None, rng: random.Random | None = None,
+                 priority: Iterable[str] | None = None):
         self.client = client
         self.rng = rng or random.Random()
         self.human = human or HumanInput(client, rng=self.rng)
@@ -323,6 +433,10 @@ class UpgradeBot:
         self.recognizer = BuildingRecognizer(self.catalog)
         self.ui = UpgradeUi(self.catalog)
         self.idle = SafeIdleTouch(self.rng)
+        configured = tuple(str(category).strip() for category in (priority or PRIORITY))
+        self.priority = tuple(category for category in configured if category)
+        if not self.priority:
+            raise ValueError("upgrade priority must contain at least one category")
         self._known: dict[str, list[BuildingTarget]] = {}
 
     def _targets(self, scene: np.ndarray) -> list[BuildingTarget]:
@@ -336,7 +450,7 @@ class UpgradeBot:
         for category, targets in by_category.items():
             self._known[category] = targets
         out = []
-        for category in PRIORITY:
+        for category in getattr(self, "priority", PRIORITY):
             out.extend(sorted(self._known.get(category, []), key=lambda t: (-t.score, t.y, t.x)))
         return out
 
