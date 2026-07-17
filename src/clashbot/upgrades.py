@@ -82,6 +82,8 @@ class BuildingTarget:
     score: float
     radius: float = 10.0
     camera_scale: float = 1.0
+    # True once the full-resolution local re-match confirmed this detection.
+    verified: bool = False
 
 
 @dataclass
@@ -163,9 +165,29 @@ class ReferenceCatalog:
 
 
 class BuildingRecognizer:
-    def __init__(self, catalog: ReferenceCatalog):
+    # The wide scale sweeps run on a downscaled frame: 4x fewer pixels per
+    # matchTemplate call. Genuine matches lose a little sharpness at half
+    # resolution, so the coarse pass relaxes thresholds and every surviving
+    # candidate is re-verified against the full-resolution local region.
+    COARSE_FACTOR = 0.5
+    COARSE_THRESHOLD_OFFSET = -0.06
+    # Templates that would shrink below this many pixels on the coarse frame
+    # (walls, bombs, traps) lose their texture at half resolution and are
+    # matched on the full-resolution frame instead.
+    MIN_COARSE_TEMPLATE_PX = 26
+    # Detections below this confidence get a second, cross-category look.
+    CONFIDENT_SCORE = 0.90
+    # A rival category must beat the claimed category by this much locally
+    # before a detection is relabelled.
+    CORRECT_MARGIN = 0.06
+
+    def __init__(self, catalog: ReferenceCatalog, *, refine: bool = True):
         self.catalog = catalog
         self.templates = [(spec, catalog.crop(spec.source, spec.crop)) for spec in catalog.specs]
+        self.refine = refine
+        self._by_category: dict[str, list[tuple[TemplateSpec, np.ndarray]]] = {}
+        for item in self.templates:
+            self._by_category.setdefault(item[0].category, []).append(item)
         # Different reference screenshots can have different source zooms.
         # Remember a scale per source instead of forcing every template onto a
         # single ruler.
@@ -201,6 +223,7 @@ class BuildingRecognizer:
         scene: np.ndarray,
         scales: list[float],
         templates: list[tuple[TemplateSpec, np.ndarray]] | None = None,
+        threshold_offset: float = 0.0,
     ) -> list[tuple[TemplateSpec, vision.Match]]:
         h, w = scene.shape[:2]
         vx1, vy1, vx2, vy2 = VILLAGE_FRAC
@@ -213,7 +236,7 @@ class BuildingRecognizer:
                 village,
                 template,
                 name=spec.name,
-                threshold=spec.threshold,
+                threshold=max(0.5, spec.threshold + threshold_offset),
                 scales=scales,
                 max_matches=spec.max_matches,
             )
@@ -222,6 +245,34 @@ class BuildingRecognizer:
                 hit.y += oy
             candidates.extend((spec, hit) for hit in hits)
         return candidates
+
+    def _coarse(
+        self,
+        small: np.ndarray,
+        resolution_scale: float,
+        scale_values: Iterable[float],
+        templates: list[tuple[TemplateSpec, np.ndarray]],
+    ) -> list[tuple[TemplateSpec, vision.Match]]:
+        return self._candidates(
+            small,
+            sorted({self.COARSE_FACTOR * resolution_scale * value
+                    for value in scale_values}),
+            templates,
+            threshold_offset=self.COARSE_THRESHOLD_OFFSET,
+        )
+
+    @staticmethod
+    def _to_full(hit: vision.Match, factor: float) -> vision.Match:
+        """Map a coarse-frame match back onto the full-resolution frame."""
+        return vision.Match(
+            name=hit.name,
+            x=round(hit.x / factor),
+            y=round(hit.y / factor),
+            w=round(hit.w / factor),
+            h=round(hit.h / factor),
+            score=hit.score,
+            scale=hit.scale / factor,
+        )
 
     @staticmethod
     def _scale_from(candidates: list[tuple[TemplateSpec, vision.Match]],
@@ -239,6 +290,9 @@ class BuildingRecognizer:
             w / self.catalog.reference_size[0],
             h / self.catalog.reference_size[1],
         )
+        small = cv2.resize(scene, None, fx=self.COARSE_FACTOR,
+                           fy=self.COARSE_FACTOR, interpolation=cv2.INTER_AREA)
+        coarse_scale = self.COARSE_FACTOR * resolution_scale
         candidates: list[tuple[TemplateSpec, vision.Match]] = []
         grouped: dict[str, list[tuple[TemplateSpec, np.ndarray]]] = {}
         for item in self.templates:
@@ -255,35 +309,86 @@ class BuildingRecognizer:
         for source, source_templates in grouped.items():
             remembered = self._last_camera_scales.get(source)
             if remembered is None:
-                anchor_hits = self._candidates(
-                    scene,
-                    [resolution_scale * value for value in rulers],
+                # Another source's verified scale is a cheaper first guess
+                # than a fresh anchor sweep.
+                others = [value for key, value in self._last_camera_scales.items()
+                          if key != source]
+                if others:
+                    remembered = float(statistics.median(others))
+            if remembered is None:
+                anchor_hits = self._coarse(
+                    small, resolution_scale, rulers,
                     self._anchor_templates(source_templates),
                 )
-                remembered = self._scale_from(anchor_hits, resolution_scale)
+                remembered = self._scale_from(anchor_hits, coarse_scale)
+
+            # Small sprites (walls, bombs, traps) lose their texture at half
+            # resolution; match them on the full frame at the shared scale.
+            expected = self.COARSE_FACTOR * resolution_scale * (remembered or 1.0)
+            small_templates = [
+                item for item in source_templates
+                if min(item[1].shape[:2]) * expected < self.MIN_COARSE_TEMPLATE_PX
+            ]
+            coarse_templates = [item for item in source_templates
+                                if item not in small_templates]
 
             source_hits: list[tuple[TemplateSpec, vision.Match]] = []
-            if remembered is not None:
-                local_scales = sorted({
-                    resolution_scale * remembered * factor
-                    for factor in (0.96, 1.0, 1.04)
-                })
-                source_hits = self._candidates(
-                    scene, local_scales, source_templates
+            if remembered is not None and coarse_templates:
+                source_hits = self._coarse(
+                    small, resolution_scale,
+                    [remembered * factor for factor in (0.96, 1.0, 1.04)],
+                    coarse_templates,
                 )
 
             source_categories = {spec.category for spec, _hit in source_hits}
-            if len(source_hits) < 2 or len(source_categories) < 2:
+            if coarse_templates and (len(source_hits) < 2 or len(source_categories) < 2):
+                source_hits = self._coarse(
+                    small, resolution_scale, recovery_values, coarse_templates
+                )
+            if coarse_templates and not source_hits:
+                # Larger templates can also dissolve at half resolution in
+                # low-contrast frames; only then pay for a full-resolution
+                # sweep.
                 source_hits = self._candidates(
                     scene,
                     [resolution_scale * value for value in recovery_values],
-                    source_templates,
+                    coarse_templates,
                 )
-
-            measured = self._scale_from(source_hits, resolution_scale)
+                measured = self._scale_from(source_hits, resolution_scale)
+                candidates.extend(source_hits)
+            else:
+                measured = self._scale_from(source_hits, coarse_scale)
+                candidates.extend(
+                    (spec, self._to_full(hit, self.COARSE_FACTOR))
+                    for spec, hit in source_hits
+                )
             if measured is not None:
                 self._last_camera_scales[source] = measured
-            candidates.extend(source_hits)
+
+            if small_templates:
+                shared = measured if measured is not None else remembered
+                small_hits: list[tuple[TemplateSpec, vision.Match]] = []
+                if shared is not None:
+                    small_hits = self._candidates(
+                        scene,
+                        [resolution_scale * shared * factor
+                         for factor in (0.94, 1.0, 1.06)],
+                        small_templates,
+                    )
+                if not small_hits:
+                    # A borrowed scale guess can be wrong for a source whose
+                    # only templates are small (no coarse measurement of its
+                    # own); re-sweep the standard rulers before giving up.
+                    small_hits = self._candidates(
+                        scene,
+                        [resolution_scale * value for value in rulers],
+                        small_templates,
+                    )
+                if measured is None:
+                    small_measured = self._scale_from(small_hits, resolution_scale)
+                    if small_measured is not None:
+                        self._last_camera_scales[source] = small_measured
+                candidates.extend(small_hits)
 
         if not candidates:
             # A malformed/empty source group should not permanently poison the
@@ -309,18 +414,77 @@ class BuildingRecognizer:
                 continue
             kept.append((spec, hit))
 
-        return [
-            BuildingTarget(
-                category=spec.category,
-                name=spec.name,
-                x=hit.center[0],
-                y=hit.center[1],
-                score=hit.score,
-                radius=max(7.0, min(hit.w, hit.h) * 0.18),
-                camera_scale=hit.scale / resolution_scale,
+        targets: list[BuildingTarget] = []
+        for spec, hit in kept:
+            target = self._verify_local(scene, spec, hit, resolution_scale)
+            if target is not None:
+                targets.append(target)
+        return targets
+
+    def _region(self, scene: np.ndarray, hit: vision.Match,
+                pad: float = 0.65) -> tuple[np.ndarray, int, int]:
+        h, w = scene.shape[:2]
+        cx, cy = hit.center
+        half_w = int(hit.w * (0.5 + pad))
+        half_h = int(hit.h * (0.5 + pad))
+        x1, y1 = max(0, cx - half_w), max(0, cy - half_h)
+        x2, y2 = min(w, cx + half_w), min(h, cy + half_h)
+        return scene[y1:y2, x1:x2], x1, y1
+
+    def _best_in_region(
+        self,
+        region: np.ndarray,
+        templates: list[tuple[TemplateSpec, np.ndarray]],
+        scales: list[float],
+        threshold_offset: float = 0.0,
+    ) -> tuple[TemplateSpec, vision.Match] | None:
+        best: tuple[TemplateSpec, vision.Match] | None = None
+        for spec, template in templates:
+            hit = vision.find(
+                region, template, name=spec.name,
+                threshold=max(0.5, spec.threshold + threshold_offset),
+                scales=scales,
             )
-            for spec, hit in kept
-        ]
+            if hit is not None and (best is None or hit.score > best[1].score):
+                best = (spec, hit)
+        return best
+
+    def _verify_local(self, scene: np.ndarray, spec: TemplateSpec,
+                      hit: vision.Match,
+                      resolution_scale: float) -> BuildingTarget | None:
+        """Confirm a candidate by re-matching its full-resolution local region.
+
+        The coarse pass only proposes; acceptance always happens here at the
+        template's own full threshold, with finer scale steps so the best
+        level template and exact position win. Uncertain confirmations get a
+        cross-category second look and may be relabelled ("asset correction").
+        """
+        region, ox, oy = self._region(scene, hit)
+        if region.shape[0] < 8 or region.shape[1] < 8:
+            return None
+        scales = sorted({hit.scale * factor for factor in (0.92, 1.0, 1.08)})
+        same = self._best_in_region(
+            region, self._by_category.get(spec.category, []), scales
+        )
+        if same is None:
+            return None
+        best_spec, best_hit = same
+        if self.refine and best_hit.score < self.CONFIDENT_SCORE:
+            rivals = [item for item in self.templates
+                      if item[0].category != spec.category]
+            rival = self._best_in_region(region, rivals, scales)
+            if rival is not None and rival[1].score >= best_hit.score + self.CORRECT_MARGIN:
+                best_spec, best_hit = rival
+        return BuildingTarget(
+            category=best_spec.category,
+            name=best_spec.name,
+            x=ox + best_hit.center[0],
+            y=oy + best_hit.center[1],
+            score=best_hit.score,
+            radius=max(7.0, min(best_hit.w, best_hit.h) * 0.18),
+            camera_scale=best_hit.scale / resolution_scale,
+            verified=True,
+        )
 
 
 class UpgradeUi:

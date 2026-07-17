@@ -56,10 +56,12 @@ class AssetCatalog:
         self.derived_root = Path(derived_root)
         self.repository_root = Path(repository_root)
         self._records: list[AssetRecord] = []
+        self._retrieval_model = None
         self._load_visual()
         self._load_sctx()
         self._load_models()
         self._load_sc2fla()
+        self._load_candidates()
         if fankit_root is not None:
             self._load_fankit(Path(fankit_root))
         self._by_label: dict[str, list[AssetRecord]] = {}
@@ -71,6 +73,27 @@ class AssetCatalog:
             }
             for key in keys:
                 self._by_label.setdefault(key, []).append(record)
+        # Keep the hot lookup path deterministic and level-aware.  Labelled
+        # references and rendered composites are preferred over raw package
+        # resources, then lower levels are adjacent for cache-friendly scans.
+        role_order = {
+            "labelled_reference": 0,
+            "synthetic_candidate": 1,
+            "vector_composition": 2,
+            "texture_atlas": 3,
+            "model": 4,
+            "resource_sprite": 5,
+        }
+        for key, records in self._by_label.items():
+            self._by_label[key] = sorted(
+                records,
+                key=lambda item: (
+                    role_order.get(item.role, 99),
+                    item.level is None,
+                    item.level if item.level is not None else 0,
+                    str(item.path),
+                ),
+            )
 
     @staticmethod
     def _manifest(path: Path) -> dict | None:
@@ -198,6 +221,26 @@ class AssetCatalog:
                     path=item.path,
                 ))
 
+    def _load_candidates(self) -> None:
+        root = self.derived_root / "detector_candidates"
+        manifest = self._manifest(root / "manifest.json")
+        if not manifest:
+            return
+        for item in manifest.get("records", []):
+            output = item.get("output")
+            if not output:
+                continue
+            self._records.append(AssetRecord(
+                source="built_sc_composite",
+                role="synthetic_candidate",
+                label=str(item.get("name") or item.get("family") or Path(output).stem),
+                category=normalize_category(str(item.get("category", "other"))),
+                level=item.get("level"),
+                path=root / output,
+                sha256=item.get("output_sha256"),
+                aliases=(str(item.get("family", "")),),
+            ))
+
     @property
     def records(self) -> tuple[AssetRecord, ...]:
         return tuple(self._records)
@@ -206,6 +249,28 @@ class AssetCatalog:
         allowed = set(roles) if roles is not None else None
         records = self._by_label.get(normalize_label(label), ())
         return tuple(record for record in records if allowed is None or record.role in allowed)
+
+    def levels_for(self, label: str, *, roles: Iterable[str] | None = None) -> tuple[int, ...]:
+        """Return available levels in recognition order without opening files."""
+        return tuple(sorted({
+            record.level for record in self.find(label, roles=roles)
+            if record.level is not None
+        }))
+
+    def retrieve(self, image, *, k: int = 5):
+        """Return nearest trained asset references for an image crop.
+
+        The model is loaded lazily so ordinary manifest queries stay cheap.
+        Missing models are represented by an empty tuple rather than causing
+        live scanning to fail.
+        """
+        if self._retrieval_model is None:
+            model_path = self.derived_root / "model" / "asset_retrieval.npz"
+            if not model_path.is_file():
+                return ()
+            from .asset_model import AssetRetrievalModel
+            self._retrieval_model = AssetRetrievalModel.load(model_path)
+        return self._retrieval_model.predict(image, k=k)
 
     def summary(self) -> dict[str, object]:
         roles = Counter(record.role for record in self._records)

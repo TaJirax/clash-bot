@@ -99,3 +99,18 @@ def test_catalog_prefers_semantic_sc2fla_index_for_unit_lookup(tmp_path):
     assert len(matches) == 1
     assert matches[0].category == "units"
     assert matches[0].level == 12
+
+
+def test_catalog_loads_built_composite_candidates(tmp_path):
+    derived = tmp_path / "derived"
+    write_manifest(derived / "detector_candidates" / "manifest.json", {"records": [{
+        "category": "units", "family": "archer", "name": "archer_idle",
+        "level": 5, "output": "composites/units/archer/level_5/a.png",
+        "output_sha256": "candidate-hash",
+    }]})
+
+    catalog = AssetCatalog(derived, fankit_root=None, repository_root=tmp_path)
+
+    record = catalog.find("archer", roles={"synthetic_candidate"})[0]
+    assert record.level == 5
+    assert record.source == "built_sc_composite"

@@ -97,7 +97,7 @@ def cmd_check_state(args: argparse.Namespace) -> None:
 def cmd_manage_status(args: argparse.Namespace) -> None:
     """Inspect verified base-management evidence without tapping."""
     from . import vision
-    from .base_management import BaseManagementInspector
+    from .base_management import BaseManagementInspector, plan_base_management
     from .upgrades import ReferenceCatalog
 
     status = BaseManagementInspector(ReferenceCatalog(args.catalog)).inspect(
@@ -110,6 +110,9 @@ def cmd_manage_status(args: argparse.Namespace) -> None:
     print(f"upgrade_affordable={status.upgrade_affordable if status.upgrade_affordable is not None else 'unverified'}")
     print(f"boost_auras={status.boost_auras} (informational; not a click target)")
     print(status.next_step)
+    plan = plan_base_management(status)
+    print(f"plan_action={plan.action}")
+    print(f"plan_reason={plan.reason}")
 
 
 def cmd_tap(args: argparse.Namespace) -> None:
@@ -279,6 +282,7 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
     """Let the bot capture and recover its own live base observations."""
     from .autonomy import AutonomousBaseScanner
     from .camera import controller_from_catalog
+    from .asset_catalog import AssetCatalog
     from .fankit import FanKitIndex
     from .multitouch import AdbPinchZoom
     from .upgrades import BuildingRecognizer, ReferenceCatalog
@@ -301,6 +305,7 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
         recognizer,
         zoom=zoom,
         fankit=FanKitIndex(args.fankit),
+        asset_catalog=AssetCatalog(args.derived_assets, args.fankit),
         root=args.root,
     )
     report = scanner.run(
@@ -315,7 +320,7 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
     ) or "none"))
     covered = sum(1 for count in report.reference_assets.values() if count)
     print(
-        f"Fan Kit semantic coverage={covered}/{len(report.counts)} detected categories; "
+        f"asset-catalog coverage={covered}/{len(report.counts)} detected categories; "
         f"recovery={', '.join(report.recovery_actions) or 'not needed'}"
     )
     if report.blocked_reason:
@@ -323,6 +328,41 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
     if report.unresolved_categories:
         print("unresolved=" + ", ".join(report.unresolved_categories))
     print(f"report={scanner.root / args.session / 'report.json'}")
+
+
+def cmd_asset_status(args: argparse.Namespace) -> None:
+    """Show the exact local game-reference data available to bot decisions."""
+    from .asset_catalog import AssetCatalog
+
+    catalog = AssetCatalog(args.derived_assets, args.fankit)
+    summary = catalog.summary()
+    print("assets=" + str(summary["assets"]))
+    print("roles=" + ", ".join(
+        f"{name}:{count}" for name, count in summary["roles"].items()
+    ))
+    if not args.label:
+        return
+    matches = catalog.find(args.label)
+    by_role = {}
+    for record in matches:
+        by_role[record.role] = by_role.get(record.role, 0) + 1
+    levels = sorted({record.level for record in matches if record.level is not None})
+    print(f"query={args.label}; matches={len(matches)}; roles={by_role}")
+    print("levels=" + (",".join(map(str, levels)) if levels else "unknown"))
+
+
+def cmd_asset_train(args: argparse.Namespace) -> None:
+    """Build the local retrieval index used by asset-aware recognition."""
+    from pathlib import Path
+    from scripts.train_asset_model import train_model
+
+    manifest = train_model(Path(args.derived_assets), Path(args.output))
+    print("trained=" + str(manifest["model"]))
+    print("samples=" + str(manifest["samples"]))
+    print("labels=" + str(manifest["labels"]))
+    print("sources=" + ", ".join(
+        f"{name}:{count}" for name, count in manifest["sources"].items()
+    ))
 
 
 def cmd_find_building(args: argparse.Namespace) -> None:
@@ -562,6 +602,33 @@ def cmd_upgrade(args: argparse.Namespace) -> None:
     print(f"done: {completed} upgrade scan(s)")
 
 
+def cmd_play(args: argparse.Namespace) -> None:
+    """Run the full collect/manage/upgrade/attack loop."""
+    from .player import GamePlayer
+
+    player = GamePlayer(adb_client.AdbClient(args.serial), root=args.root)
+    try:
+        report = player.run(
+            session=args.session,
+            cycles=args.cycles,
+            interval=args.interval,
+            dry_run=args.dry_run,
+            attack_mode=args.attack,
+            upgrade=not args.no_upgrade,
+            battle_timeout=args.battle_timeout,
+        )
+    except KeyboardInterrupt:
+        print("stopped")
+        return
+    attacks = sum(1 for cycle in report.cycles if cycle.attack_attempted)
+    collected = sum(cycle.collected for cycle in report.cycles)
+    print(
+        f"done: {len(report.cycles)} cycle(s), {collected} bubble(s) collected, "
+        f"{attacks} attack attempt(s)"
+    )
+    print(f"session log -> {report.log_path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="clashbot")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -651,10 +718,22 @@ def main() -> None:
     p.add_argument("--route", default="right,left,up,down")
     p.add_argument("--catalog", default="assets/buildings.json")
     p.add_argument("--fankit", default="assets/supercell_fankit")
+    p.add_argument("--derived-assets", default="assets/derived_cache")
     p.add_argument("--root", default="captures/autonomous")
     p.add_argument("--min-detections", type=int, default=14)
     p.add_argument("--min-categories", type=int, default=8)
     p.set_defaults(func=cmd_scan_base)
+
+    p = sub.add_parser("asset-status", help="report local asset data available to bot scans")
+    p.add_argument("--label", help="optional building/unit, e.g. archer or cannon")
+    p.add_argument("--fankit", default="assets/supercell_fankit")
+    p.add_argument("--derived-assets", default="assets/derived_cache")
+    p.set_defaults(func=cmd_asset_status)
+
+    p = sub.add_parser("asset-train", help="train the local asset retrieval index")
+    p.add_argument("--derived-assets", default="assets/derived_cache")
+    p.add_argument("--output", default="assets/derived_cache/model/asset_retrieval.npz")
+    p.set_defaults(func=cmd_asset_train)
 
     p = sub.add_parser("find-building", help="search camera views for a building category")
     p.add_argument("serial")
@@ -769,6 +848,26 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true",
                    help="recognise and report only; do not tap")
     p.set_defaults(func=cmd_upgrade)
+
+    p = sub.add_parser(
+        "play",
+        help="run the full collect/manage/upgrade/attack loop in cycles",
+    )
+    p.add_argument("serial")
+    p.add_argument("session", nargs="?", default="play")
+    p.add_argument("--cycles", type=int, default=1)
+    p.add_argument("--interval", type=float, default=60.0,
+                   help="seconds between cycles")
+    p.add_argument("--attack", choices=("off", "policy", "always"), default="policy",
+                   help="policy attacks only when verified base work is clear")
+    p.add_argument("--battle-timeout", type=float, default=180.0,
+                   help="seconds to wait for a verified return home after a battle")
+    p.add_argument("--no-upgrade", action="store_true",
+                   help="skip the upgrade phase even when a builder is free")
+    p.add_argument("--root", default="captures/play")
+    p.add_argument("--dry-run", action="store_true",
+                   help="recognize, plan, and report only; never tap")
+    p.set_defaults(func=cmd_play)
 
     args = parser.parse_args()
     try:

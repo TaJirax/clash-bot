@@ -22,6 +22,49 @@ class BaseManagementStatus:
     upgrade_affordable: bool | None
     boost_auras: int
     next_step: str
+    collection_pending: bool | None = None
+    army_ready: bool | None = None
+    # The verified detections behind recognized_buildings, for layout tracking.
+    targets: tuple = ()
+
+
+@dataclass(frozen=True)
+class BaseManagementPlan:
+    """One safe, ordered scheduler decision; execution is a separate layer."""
+
+    action: str
+    reason: str
+    phases: tuple[str, ...] = ()
+
+
+def plan_base_management(status: BaseManagementStatus) -> BaseManagementPlan:
+    """Choose the next base action using only verified evidence.
+
+    The order mirrors normal progression: recover UI, collect, start research,
+    spend builders on affordable upgrades, keep the army ready, and attack only
+    when every higher-priority state is explicitly known to be clear.
+    """
+    if status.menu_state == "inactivity_dialog":
+        return BaseManagementPlan("recover", "inactivity dialog blocks all base actions")
+    if status.collection_pending is True:
+        return BaseManagementPlan("collect", "verified resource bubbles are waiting")
+    if status.research_available is True:
+        return BaseManagementPlan("research", "laboratory research is idle and ready")
+    if status.builders_available is not None and status.builders_available > 0:
+        if status.upgrade_affordable is True:
+            return BaseManagementPlan("upgrade", "free builder and affordable upgrade are verified")
+        return BaseManagementPlan("inspect-upgrades", "free builder is verified; upgrade cost needs checking")
+    if status.army_ready is False:
+        return BaseManagementPlan("train", "army readiness is verified as incomplete")
+    if any(value is None for value in (
+        status.collection_pending, status.builders_available,
+        status.research_available, status.upgrade_affordable, status.army_ready,
+    )):
+        return BaseManagementPlan("inspect", "base state is incomplete; do not attack on assumptions")
+    return BaseManagementPlan(
+        "attack", "verified base work is clear and army is ready",
+        ("collect", "research", "upgrade", "train", "attack"),
+    )
 
 
 class BaseManagementInspector:
@@ -73,4 +116,5 @@ class BaseManagementInspector:
             upgrade_affordable=None,
             boost_auras=len(self.boosts.find(scene)),
             next_step=next_step,
+            targets=tuple(matches),
         )

@@ -135,3 +135,20 @@ labelling and held-out validation process.
 
 Runtime recognition must load a compact trained detector and metadata index,
 not scan 17 GB of artwork or compare all 20,000 files against each frame.
+
+## Local asset training index
+
+The repository now builds a lightweight visual retrieval index from every
+usable generated candidate and labelled reference PNG:
+
+```powershell
+.venv\Scripts\python.exe -m clashbot asset-train
+.venv\Scripts\python.exe -m clashbot asset-status --label archer
+```
+
+The current index contains 1,625 samples (1,455 synthetic candidates and 170
+labelled references), 191 semantic labels, and is saved at
+`assets/derived_cache/model/asset_retrieval.npz` with a JSON manifest beside it.
+This index is used as an asset-aware retrieval layer; it is not a replacement
+for a bounding-box detector. Universal in-game detection still requires
+labelled gameplay frames and held-out validation for each camera/zoom state.

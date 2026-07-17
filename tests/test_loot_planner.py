@@ -44,3 +44,18 @@ def test_planner_skips_low_loot_and_high_level_targets():
     )
     assert not low_loot.attack and "below" in low_loot.reason
     assert not high_level.attack and "above" in high_level.reason
+
+
+def test_planner_requires_troop_power_when_verified_defenses_are_stronger():
+    planner = LootPlanner()
+    enemy = _enemy(defense_power=120)
+    weak = planner.decide(
+        player_town_hall=3, capacity=Resources(gold=10_000, elixir=10_000),
+        enemy=enemy, army={"giant": 2, "goblin": 20}, army_power=90,
+    )
+    strong = planner.decide(
+        player_town_hall=3, capacity=Resources(gold=10_000, elixir=10_000),
+        enemy=enemy, army={"giant": 2, "goblin": 20}, army_power=120,
+    )
+    assert not weak.attack and "exceed troop power" in weak.reason
+    assert strong.attack

@@ -35,6 +35,8 @@ class EnemyEvidence:
     defensive_buildings: int | None
     reachable_resource_buildings: int | None
     exposed_resource_buildings: int | None
+    defense_power: float | None = None
+    defense_level: float | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,10 @@ class LootPolicy:
     max_defenses_for_loot: int = 5
     min_reachable_resources: int = 1
     min_exposed_resources: int = 1
+    # A target may be stronger than the army, but never by more than this
+    # verified ratio.  Unknown power remains fail-closed when power matching
+    # is requested by the caller.
+    max_defense_to_army_ratio: float = 1.15
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,7 @@ class AttackPlan:
     attack: bool
     reason: str
     composition: tuple[str, ...] = ()
+    phases: tuple[str, ...] = ()
 
 
 # Troop purpose is intentionally explicit instead of treating all troop cards
@@ -69,7 +76,8 @@ class LootPlanner:
         self.policy = policy or LootPolicy()
 
     def decide(self, *, player_town_hall: int | None, capacity: Resources | None,
-               enemy: EnemyEvidence, army: Mapping[str, int]) -> AttackPlan:
+               enemy: EnemyEvidence, army: Mapping[str, int],
+               army_power: float | None = None) -> AttackPlan:
         if player_town_hall is None or capacity is None:
             return AttackPlan(False, "skip: player Town Hall level or resource capacity is unverified")
         if enemy.available_loot is None:
@@ -92,6 +100,14 @@ class LootPlanner:
         if enemy.exposed_resource_buildings < self.policy.min_exposed_resources:
             return AttackPlan(False, "skip: resource buildings are not exposed")
 
+        # Power is optional for legacy callers, but when the perception layer
+        # provides it we enforce the requested troop-versus-defense check.
+        if enemy.defense_power is not None:
+            if army_power is None or army_power <= 0:
+                return AttackPlan(False, "skip: troop power is unverified")
+            if enemy.defense_power > army_power * self.policy.max_defense_to_army_ratio:
+                return AttackPlan(False, "skip: verified defenses exceed troop power")
+
         composition: list[str] = []
         if army.get("giant", 0):
             composition.append("giants first to draw defense fire")
@@ -103,4 +119,14 @@ class LootPlanner:
             composition.append("barbarians for cheap cleanup/distraction")
         if not composition:
             return AttackPlan(False, "skip: no learned deployable army composition")
-        return AttackPlan(True, "attack: verified loot target meets policy", tuple(composition))
+        phases = (
+            "scout: confirm legal deployment edge and nearest exposed collectors",
+            "tank: deploy giants away from concentrated defenses",
+            "loot: deploy goblins only after tanks draw fire",
+            "support: place archers behind tanks, then barbarians for cleanup",
+            "withdraw: stop when target loot is secured; preserve remaining army",
+        )
+        return AttackPlan(
+            True, "attack: verified loot, reachability, and defense power meet policy",
+            tuple(composition), phases,
+        )

@@ -16,6 +16,7 @@ import numpy as np
 from . import vision
 from .adb_client import AdbClient
 from .camera import CameraZoomController
+from .asset_catalog import AssetCatalog
 from .fankit import FanKitIndex
 from .navigation import CameraPanController
 from .upgrades import BuildingRecognizer, BuildingTarget
@@ -39,6 +40,7 @@ class AutonomousScanReport:
     counts: dict[str, int]
     reference_assets: dict[str, int]
     reference_levels: dict[str, tuple[int, ...]]
+    asset_roles: dict[str, dict[str, int]]
     recovery_actions: tuple[str, ...]
     blocked_reason: str | None
     unresolved_categories: tuple[str, ...]
@@ -91,6 +93,7 @@ class AutonomousBaseScanner:
         pan: CameraPanController | None = None,
         zoom: CameraZoomController | None = None,
         fankit: FanKitIndex | None = None,
+        asset_catalog: AssetCatalog | None = None,
         root: str | Path = "captures/autonomous",
         sleep=time.sleep,
         is_home: Callable[[np.ndarray], bool] | None = None,
@@ -100,6 +103,10 @@ class AutonomousBaseScanner:
         self.pan = pan or CameraPanController(client)
         self.zoom = zoom
         self.fankit = fankit or FanKitIndex()
+        # The unified package cache is optional for tests/portable installs,
+        # but a live CLI scan supplies it. It is manifest-only: no 3D model,
+        # atlas or 17 GB image tree is decoded during a scan.
+        self.asset_catalog = asset_catalog
         self.root = Path(root)
         self.sleep = sleep
         if is_home is None:
@@ -244,12 +251,24 @@ class AutonomousBaseScanner:
             category: max(view.get(category, 0) for view in per_view_counts)
             for category in sorted({key for view in per_view_counts for key in view})
         }
-        reference_assets = {
-            category: len(self.fankit.assets_for(category)) for category in counts
-        }
-        reference_levels = {
-            category: self.fankit.levels_for(category) for category in counts
-        }
+        reference_assets = {}
+        reference_levels = {}
+        asset_roles: dict[str, dict[str, int]] = {}
+        for category in counts:
+            if self.asset_catalog is None:
+                reference_assets[category] = len(self.fankit.assets_for(category))
+                reference_levels[category] = self.fankit.levels_for(category)
+                asset_roles[category] = {"labelled_reference": reference_assets[category]}
+                continue
+            records = self.asset_catalog.find(
+                category, roles={"labelled_reference", "vector_composition"}
+            )
+            role_counts = Counter(record.role for record in records)
+            reference_assets[category] = len(records)
+            reference_levels[category] = tuple(sorted({
+                record.level for record in records if record.level is not None
+            }))
+            asset_roles[category] = dict(sorted(role_counts.items()))
         report = AutonomousScanReport(
             created_at=datetime.now(timezone.utc).isoformat(),
             views=tuple(record for record, _targets in observations),
@@ -257,6 +276,7 @@ class AutonomousBaseScanner:
             counts=counts,
             reference_assets=reference_assets,
             reference_levels=reference_levels,
+            asset_roles=asset_roles,
             recovery_actions=tuple(recovery),
             blocked_reason=blocked_reason,
             unresolved_categories=tuple(sorted(expected_categories - set(counts))),

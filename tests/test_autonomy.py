@@ -47,6 +47,17 @@ class FakeFanKit:
         return (1, 2, 3) if category == "cannon" else ()
 
 
+class FakeAssetCatalog:
+    class Record:
+        def __init__(self, role, level):
+            self.role, self.level = role, level
+
+    def find(self, category, *, roles=None):
+        assert category == "cannon"
+        assert roles == {"labelled_reference", "vector_composition"}
+        return (self.Record("labelled_reference", 3), self.Record("vector_composition", 4))
+
+
 def test_autonomous_scan_captures_and_uses_zoom_pan_recovery(tmp_path):
     zoom = FakeZoom()
     scanner = AutonomousBaseScanner(
@@ -68,6 +79,20 @@ def test_autonomous_scan_captures_and_uses_zoom_pan_recovery(tmp_path):
     assert report.reference_assets == {"cannon": 2}
     assert report.reference_levels == {"cannon": (1, 2, 3)}
     assert (tmp_path / "test" / "report.json").is_file()
+
+
+def test_autonomous_scan_uses_unified_asset_catalog_when_available(tmp_path):
+    scanner = AutonomousBaseScanner(
+        FakeClient(), FakeRecognizer(), pan=FakePan(), fankit=FakeFanKit(),
+        asset_catalog=FakeAssetCatalog(), root=tmp_path, sleep=lambda _seconds: None,
+        is_home=lambda _scene: True,
+    )
+
+    report = scanner.run("catalog", route=(), min_detections=1, min_categories=1)
+
+    assert report.reference_assets == {"cannon": 2}
+    assert report.reference_levels == {"cannon": (3, 4)}
+    assert report.asset_roles == {"cannon": {"labelled_reference": 1, "vector_composition": 1}}
 
 
 def test_connection_retry_requires_dark_modal_and_cyan_action():

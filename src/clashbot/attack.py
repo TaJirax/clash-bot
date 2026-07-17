@@ -79,7 +79,10 @@ class AttackUi:
             # captured button crop.  The button remains constrained to its
             # distinctive lower-left ROI, so accept the verified live score
             # while still rejecting unrelated orange controls.
-            threshold=0.80,
+            # Live emulator screenshots may include notification badges and
+            # slight UI scaling; the constrained lower-left ROI keeps this
+            # threshold safe while accepting those harmless variations.
+            threshold=0.65,
             scales=[vision.scale_for(scene) * value for value in (0.94, 1.0, 1.06)],
         )
         if match is not None:
