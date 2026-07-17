@@ -107,3 +107,73 @@ def test_verification_rejects_candidates_without_local_support(catalog):
                             score=0.99, scale=1.0)
     beta_spec = next(spec for spec in catalog.specs if spec.category == "beta")
     assert recognizer._verify_local(scene, beta_spec, fake_hit, 1.0) is None
+
+
+class _FakePrediction:
+    def __init__(self, label: str):
+        self.label = label
+
+
+class _FakeCatalog:
+    def __init__(self, labels: list[str]):
+        self._labels = labels
+
+    def retrieve(self, image, *, k: int = 5):
+        return tuple(_FakePrediction(label) for label in self._labels)
+
+
+def _stub_ambiguous_hit(recognizer, spec, *, score: float = 0.65):
+    """Make the primary full-threshold lookup miss and the ambiguous-band
+    retry return one fixed candidate hit for `spec`, regardless of the real
+    pixel data in the region. This isolates the ambiguous-band branching
+    logic from exact matchTemplate correlation values."""
+    hit = vision.Match(name=spec.name, x=10, y=10, w=40, h=40, score=score)
+
+    def fake_best_in_region(region, templates, scales, threshold_offset=0.0):
+        if threshold_offset == 0.0:
+            return None
+        return (spec, hit)
+
+    recognizer._best_in_region = fake_best_in_region
+
+
+def test_ambiguous_match_is_accepted_when_catalog_agrees(catalog):
+    scene = _scene((_patch_beta(), 500, 350))
+    beta_spec = next(spec for spec in catalog.specs if spec.category == "beta")
+    recognizer = BuildingRecognizer(
+        catalog, asset_catalog=_FakeCatalog(["beta:beta_lv1"])
+    )
+    _stub_ambiguous_hit(recognizer, beta_spec)
+    hit = vision.Match(name="beta_lv1", x=500, y=350, w=64, h=64, score=0.0)
+
+    target = recognizer._verify_local(scene, beta_spec, hit, 1.0)
+
+    assert target is not None
+    assert target.category == "beta"
+    assert target.verified
+
+
+def test_ambiguous_match_is_rejected_when_catalog_disagrees(catalog):
+    scene = _scene((_patch_beta(), 500, 350))
+    beta_spec = next(spec for spec in catalog.specs if spec.category == "beta")
+    recognizer = BuildingRecognizer(
+        catalog, asset_catalog=_FakeCatalog(["alpha:alpha_lv1"])
+    )
+    _stub_ambiguous_hit(recognizer, beta_spec)
+    hit = vision.Match(name="beta_lv1", x=500, y=350, w=64, h=64, score=0.0)
+
+    target = recognizer._verify_local(scene, beta_spec, hit, 1.0)
+
+    assert target is None
+
+
+def test_ambiguous_band_needs_a_catalog(catalog):
+    scene = _scene((_patch_beta(), 500, 350))
+    beta_spec = next(spec for spec in catalog.specs if spec.category == "beta")
+    recognizer = BuildingRecognizer(catalog)  # no asset_catalog
+    _stub_ambiguous_hit(recognizer, beta_spec)
+    hit = vision.Match(name="beta_lv1", x=500, y=350, w=64, h=64, score=0.0)
+
+    target = recognizer._verify_local(scene, beta_spec, hit, 1.0)
+
+    assert target is None

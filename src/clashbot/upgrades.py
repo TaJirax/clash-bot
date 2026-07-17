@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 
 from . import vision
+from .asset_catalog import normalize_label
 from .paths import BUILDING_CATALOG
 from .adb_client import AdbClient
 from .human import HumanInput
@@ -180,11 +181,17 @@ class BuildingRecognizer:
     # A rival category must beat the claimed category by this much locally
     # before a detection is relabelled.
     CORRECT_MARGIN = 0.06
+    # A below-threshold match this close to its template's own threshold may
+    # still be accepted if a second model (the asset-retrieval catalog)
+    # independently agrees on category.
+    AMBIGUOUS_BAND = 0.08
 
-    def __init__(self, catalog: ReferenceCatalog, *, refine: bool = True):
+    def __init__(self, catalog: ReferenceCatalog, *, refine: bool = True,
+                 asset_catalog=None):
         self.catalog = catalog
         self.templates = [(spec, catalog.crop(spec.source, spec.crop)) for spec in catalog.specs]
         self.refine = refine
+        self.asset_catalog = asset_catalog
         self._by_category: dict[str, list[tuple[TemplateSpec, np.ndarray]]] = {}
         for item in self.templates:
             self._by_category.setdefault(item[0].category, []).append(item)
@@ -467,7 +474,9 @@ class BuildingRecognizer:
             region, self._by_category.get(spec.category, []), scales
         )
         if same is None:
-            return None
+            return self._ambiguous_band_target(
+                region, ox, oy, spec, scales, resolution_scale
+            )
         best_spec, best_hit = same
         if self.refine and best_hit.score < self.CONFIDENT_SCORE:
             rivals = [item for item in self.templates
@@ -484,6 +493,50 @@ class BuildingRecognizer:
             radius=max(7.0, min(best_hit.w, best_hit.h) * 0.18),
             camera_scale=best_hit.scale / resolution_scale,
             verified=True,
+        )
+
+    def _ambiguous_band_target(
+        self,
+        region: np.ndarray,
+        ox: int,
+        oy: int,
+        spec: TemplateSpec,
+        scales: list[float],
+        resolution_scale: float,
+    ) -> BuildingTarget | None:
+        """Recover a below-threshold match only when a second model agrees.
+
+        See docs/universal-bot-blueprint.md: "confirm questionable objects
+        from at least two views or with a second model."
+        """
+        if self.asset_catalog is None:
+            return None
+        candidate = self._best_in_region(
+            region, self._by_category.get(spec.category, []), scales,
+            threshold_offset=-self.AMBIGUOUS_BAND,
+        )
+        if candidate is None:
+            return None
+        best_spec, best_hit = candidate
+        if not self._confirmed_by_catalog(region, best_spec.category):
+            return None
+        return BuildingTarget(
+            category=best_spec.category,
+            name=best_spec.name,
+            x=ox + best_hit.center[0],
+            y=oy + best_hit.center[1],
+            score=best_hit.score,
+            radius=max(7.0, min(best_hit.w, best_hit.h) * 0.18),
+            camera_scale=best_hit.scale / resolution_scale,
+            verified=True,
+        )
+
+    def _confirmed_by_catalog(self, region: np.ndarray, category: str) -> bool:
+        predictions = self.asset_catalog.retrieve(region, k=5)
+        target = normalize_label(category)
+        return any(
+            normalize_label(prediction.label.split(":", 1)[0]) == target
+            for prediction in predictions
         )
 
 
