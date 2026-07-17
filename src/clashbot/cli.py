@@ -293,7 +293,8 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
         sys.exit(2)
     client = adb_client.AdbClient(args.serial)
     catalog = ReferenceCatalog(args.catalog)
-    recognizer = BuildingRecognizer(catalog)
+    asset_catalog = AssetCatalog(args.derived_assets, args.fankit)
+    recognizer = BuildingRecognizer(catalog, asset_catalog=asset_catalog)
     zoom = controller_from_catalog(
         client, args.catalog, actuator=AdbPinchZoom(client)
     )
@@ -305,7 +306,7 @@ def cmd_scan_base(args: argparse.Namespace) -> None:
         recognizer,
         zoom=zoom,
         fankit=FanKitIndex(args.fankit),
-        asset_catalog=AssetCatalog(args.derived_assets, args.fankit),
+        asset_catalog=asset_catalog,
         root=args.root,
     )
     report = scanner.run(
