@@ -13,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 from clashbot import vision
+from clashbot.asset_catalog import AssetCatalog
 from clashbot.upgrades import BuildingRecognizer, ReferenceCatalog
 
 
@@ -120,11 +121,14 @@ def main() -> None:
     parser.add_argument("--held-out-dir", type=Path, default=Path("assets/eval/held_out"))
     parser.add_argument("--catalog", type=Path, default=None)
     parser.add_argument("--radius", type=float, default=24.0)
+    parser.add_argument("--fankit", type=Path, default=Path("assets/supercell_fankit"))
+    parser.add_argument("--derived-assets", type=Path, default=Path("assets/derived_cache"))
     args = parser.parse_args()
     annotations = load_annotations(args.held_out_dir)
     if not annotations:
         raise SystemExit(f"no annotations found under {args.held_out_dir}")
-    recognizer = BuildingRecognizer(ReferenceCatalog(args.catalog))
+    asset_catalog = AssetCatalog(args.derived_assets, args.fankit)
+    recognizer = BuildingRecognizer(ReferenceCatalog(args.catalog), asset_catalog=asset_catalog)
     report = evaluate(recognizer, annotations, radius=args.radius)
     print(json.dumps(report, indent=2))
 
